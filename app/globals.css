@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0d0d0f;
+  color: #f2f2f3;
+  font-family: 'DM Mono', monospace;
+}
+
+/* Monospace already gives us tabular figures, but be explicit for the numeric
+   columns so alignment survives a font fallback. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

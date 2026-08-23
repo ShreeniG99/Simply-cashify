@@ -1,0 +1,20 @@
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+.env
+.env.local
+.env*.local
+
+# Persisted run output — regenerated on every run
+data/runs/*
+!data/runs/.gitkeep
+
+# Large uploaded datasets. Fixtures and benchmark results ARE committed.
+data/raw/*
+!data/raw/.gitkeep
+
+.DS_Store
