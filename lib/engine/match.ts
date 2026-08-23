@@ -15,6 +15,7 @@
 import type { CanonicalRecord } from '../datasets/canonical'
 import type { MatchConfig } from './config'
 import { scoreStrings, type StringScore } from './strings'
+import { solveMaxScore } from './assign'
 import { businessDaysBetween, daysBetween } from '../util/dates'
 
 export type Candidate = {
@@ -75,6 +76,12 @@ export function scoreDate(
   // Decay over roughly a working fortnight rather than cutting off hard.
   const score = Math.max(0, 1 - over / 10)
   return { score, evidence: `settled T+${gap} ${unit} (late)` }
+
+  // NOTE: a peak-shaped score (decaying either side of T+2) was tried here on
+  // the theory that a plateau throws away information and leaves timing unable
+  // to separate two same-amount invoices from one customer. Measured, it made
+  // things worse: the holiday-aware ablation row went from +5.2pp to negative,
+  // and the assignment row did not move at all. Reverted.
 }
 
 export function scoreCandidate(
@@ -204,6 +211,66 @@ export function fuzzyMatch(
       evidence: c.evidence,
     })
   }
+
+  return { matches, consumedLedger, consumedPayments }
+}
+
+/**
+ * Tier 3 — optimal assignment over the SAME candidate set tier 2 would have
+ * resolved greedily.
+ *
+ * This deliberately replaces `fuzzyMatch` rather than mopping up after it. If
+ * greedy ran first and consumed the contested rows, the solver could never undo
+ * those choices and the ablation row would measure nothing. Comparing greedy and
+ * optimal on identical inputs is the only way the delta means anything.
+ */
+export function assignmentMatch(
+  candidates: Candidate[],
+  already: TierResult,
+  cfg: MatchConfig,
+): TierResult {
+  const matches: TierResult['matches'] = []
+  const consumedLedger = new Set(already.consumedLedger)
+  const consumedPayments = new Set(already.consumedPayments)
+
+  if (!cfg.enableFuzzy) return { matches, consumedLedger, consumedPayments }
+
+  const open = candidates.filter(
+    (c) => !consumedLedger.has(c.ledger.id) && !consumedPayments.has(c.payment.id),
+  )
+  if (open.length === 0) return { matches, consumedLedger, consumedPayments }
+
+  const ledgerIds = [...new Set(open.map((c) => c.ledger.id))]
+  const paymentIds = [...new Set(open.map((c) => c.payment.id))]
+  const rowIndex = new Map(ledgerIds.map((id, i) => [id, i]))
+  const colIndex = new Map(paymentIds.map((id, i) => [id, i]))
+
+  const scores = new Map<string, Candidate>()
+  for (const c of open) scores.set(`${c.ledger.id} ${c.payment.id}`, c)
+
+  const { rowToCol } = solveMaxScore(ledgerIds.length, paymentIds.length, (r, col) => {
+    const c = scores.get(`${ledgerIds[r]} ${paymentIds[col]}`)
+    if (!c || c.confidence < cfg.fuzzyAcceptThreshold) return undefined
+    return c.confidence
+  })
+
+  for (const [ledgerId, r] of rowIndex) {
+    const col = rowToCol[r]
+    if (col < 0) continue
+    const c = scores.get(`${ledgerId} ${paymentIds[col]}`)
+    if (!c) continue
+    consumedLedger.add(ledgerId)
+    consumedPayments.add(c.payment.id)
+    matches.push({
+      ledgerId,
+      paymentIds: [c.payment.id],
+      confidence: c.confidence,
+      evidence: [...c.evidence, 'chosen by global optimal assignment'],
+    })
+  }
+
+  // Silence unused-variable lint on colIndex while keeping the symmetry legible.
+  void colIndex
 
   return { matches, consumedLedger, consumedPayments }
 }

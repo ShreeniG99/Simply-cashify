@@ -10,6 +10,7 @@
 import { execSync } from 'node:child_process'
 import { runReconciliation } from '../lib/api/run'
 import { pctString } from '../lib/util/format'
+import { runSeededAblation } from '../lib/eval/ablation'
 
 const seed = Number(process.env.SEED ?? 42)
 const invoiceCount = Number(process.env.INVOICES ?? 180)
@@ -53,7 +54,7 @@ console.log(`  rate                   ${run.stats.recordsPerSecond.toLocaleStrin
 console.log(`  agent tier             ${run.agentTier}`)
 console.log('')
 
-console.log('ABLATION')
+console.log(`ABLATION (seed ${run.seed})`)
 console.log('  config                      precision   recall   F1       auto-clear   false exc.')
 for (const r of run.ablation) {
   console.log(
@@ -63,6 +64,27 @@ for (const r of run.ablation) {
       `${pctString(r.f1).padStart(9)}` +
       `${pctString(r.autoClearRate).padStart(13)}` +
       `${String(r.falseExceptions).padStart(12)}`,
+  )
+}
+console.log('')
+
+// A single seed cannot separate a real effect from noise, so the headline
+// ablation is the multi-seed one.
+const seeded = runSeededAblation()
+console.log(`ABLATION ACROSS ${seeded.seeds.length} SEEDS  [${seeded.seeds.join(', ')}]`)
+console.log('  config                     mean recall   (min–max)      ±sd      gain')
+for (const r of seeded.rows) {
+  const gain =
+    r.meanGainOverPrevious === 0 && r.label === seeded.rows[0].label
+      ? '     —'
+      : `${r.meanGainOverPrevious >= 0 ? '+' : ''}${(r.meanGainOverPrevious * 100).toFixed(1)}pp`
+  const flag = r.gainWithinNoise ? '  (within noise)' : ''
+  console.log(
+    `  ${r.label.padEnd(26)}` +
+      `${pctString(r.meanRecall).padStart(8)}   ` +
+      `(${pctString(r.minRecall)}–${pctString(r.maxRecall)})`.padEnd(17) +
+      `${pctString(r.recallStdDev).padStart(6)}` +
+      `${gain.padStart(9)}${flag}`,
   )
 }
 console.log('')

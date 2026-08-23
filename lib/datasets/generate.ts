@@ -286,8 +286,16 @@ function buildInvoices(plan: DiscrepancyClass[], rng: Rng): Invoice[] {
       if (partnerIdx !== -1) {
         const amount = toMinor(rng.int(20000, 80000))
         const date = randomInvoiceDate(rng)
-        invoices.push(makeInvoice(++n, cls, rng, { amount, date }))
-        invoices.push(makeInvoice(++n, cls, rng, { amount, date: addDays(date, 1) }))
+        // The pair MUST share a counterparty. Two same-amount invoices from
+        // different customers are trivially separable by name, which made this
+        // class inert — nothing was ever actually contested. The realistic case
+        // is one customer with two similar invoices in the same week, where
+        // timing is the only thing telling the payments apart.
+        const counterparty = rng.pick(COUNTERPARTIES)
+        invoices.push(makeInvoice(++n, cls, rng, { amount, date, counterparty }))
+        invoices.push(
+          makeInvoice(++n, cls, rng, { amount, date: addDays(date, 1), counterparty }),
+        )
         plan[partnerIdx] = 'clean' // consumed
       } else {
         invoices.push(makeInvoice(++n, 'clean', rng, {}))
@@ -305,10 +313,10 @@ function makeInvoice(
   n: number,
   cls: DiscrepancyClass,
   rng: Rng,
-  override: { amount?: bigint; date?: string },
+  override: { amount?: bigint; date?: string; counterparty?: string },
 ): Invoice {
   const id = `INV-${String(2000 + n)}`
-  const counterparty = rng.pick(COUNTERPARTIES)
+  const counterparty = override.counterparty ?? rng.pick(COUNTERPARTIES)
   const ifsc = cls === 'wrong_ifsc' ? corruptIfsc(rng) : rng.pick(IFSC_CODES)
 
   // Holiday-delayed invoices sit just before Gandhi Jayanti (2026-10-02) so

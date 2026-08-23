@@ -14,6 +14,7 @@ import type { CanonicalBatch, CanonicalRecord } from '../datasets/canonical'
 import { recordCount } from '../datasets/canonical'
 import { DEFAULT_CONFIG, type MatchConfig } from './config'
 import {
+  assignmentMatch,
   buildCandidates,
   exactMatch,
   fuzzyMatch,
@@ -56,23 +57,32 @@ export function reconcile(batch: CanonicalBatch, opts: ReconcileOptions = {}): R
   const byLedger = groupCandidates(candidates)
 
   const tier1 = exactMatch(candidates)
-  const tier2 = fuzzyMatch(candidates, tier1, cfg)
+
+  // Tier 3 REPLACES tier 2's greedy resolution rather than running after it.
+  // Greedy consumes both sides of every pair it takes, so anything it got wrong
+  // would already be locked in and the solver could not undo it — the ablation
+  // row would then measure nothing at all.
+  const contested = cfg.enableAssignment
+    ? assignmentMatch(candidates, tier1, cfg)
+    : fuzzyMatch(candidates, tier1, cfg)
+  const contestedTier: MatchTier = cfg.enableAssignment ? 'assignment' : 'fuzzy'
+
   const merged: TierResult = {
-    matches: [...tier1.matches, ...tier2.matches],
-    consumedLedger: tier2.consumedLedger,
-    consumedPayments: tier2.consumedPayments,
+    matches: [...tier1.matches, ...contested.matches],
+    consumedLedger: contested.consumedLedger,
+    consumedPayments: contested.consumedPayments,
   }
-  const tier2b = splitMatch(ledger, payments, merged, cfg)
+  const splits = splitMatch(ledger, payments, merged, cfg)
 
   const matches: ProposedMatch[] = [
     ...tier1.matches.map((m) => toProposed(m, 'exact')),
-    ...tier2.matches.map((m) => toProposed(m, 'fuzzy')),
-    ...tier2b.matches.map((m) => toProposed(m, 'fuzzy')),
+    ...contested.matches.map((m) => toProposed(m, contestedTier)),
+    ...splits.matches.map((m) => toProposed(m, 'fuzzy')),
   ]
 
   const decisions: DecisionRecord[] = []
   const evidenceByLedger = new Map<string, string[]>()
-  for (const m of [...tier1.matches, ...tier2.matches, ...tier2b.matches]) {
+  for (const m of [...tier1.matches, ...contested.matches, ...splits.matches]) {
     evidenceByLedger.set(m.ledgerId, m.evidence)
   }
 
