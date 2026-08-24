@@ -22,6 +22,14 @@ function fixture(): RunPayload {
     agentTier: 'skipped_no_key',
     tierBreakdown: [],
     ceiling: 0.9,
+    cashForecast: {
+      asOf: '2026-09-30',
+      collectionLagDays: 2,
+      lagSampleSize: 2,
+      confirmedMinor: '0.00',
+      openReceivablesMinor: '0.00',
+      weeks: [],
+    },
     matches: [
       {
         ledgerId: 'INV-2841',

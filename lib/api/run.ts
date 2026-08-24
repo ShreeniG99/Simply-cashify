@@ -11,6 +11,9 @@ import { score, type ScoreReport } from '../eval/score'
 import { ABLATION_RUNGS } from '../engine/config'
 import { formatMinor, type CanonicalRecord } from '../datasets/canonical'
 import type { ReconcileResult } from '../engine/types'
+import { buildCashForecast } from '../forecast/cash'
+import { IN_FIXED_HOLIDAYS_2026 } from '../util/dates'
+import { notifySlack } from '../tools/actions/slack'
 
 export type AblationRow = {
   label: string
@@ -53,6 +56,28 @@ export type RunPayload = {
   decisions: ReconcileResult['decisions']
   /** The honest ceiling: what fraction of rows are matchable at all. */
   ceiling: number
+  cashForecast: {
+    asOf: string
+    collectionLagDays: number
+    lagSampleSize: number
+    confirmedMinor: string
+    openReceivablesMinor: string
+    weeks: {
+      weekIndex: number
+      weekStart: string
+      confirmed: string
+      projected: string
+      cumulative: string
+      bandLow: string
+      bandHigh: string
+      /** Major-unit numbers (rupees, not paisa) for charting — display uses the formatted strings above. */
+      confirmedValue: number
+      projectedValue: number
+      cumulativeValue: number
+      bandLowValue: number
+      bandHighValue: number
+    }[]
+  }
 }
 
 export async function runReconciliation(
@@ -91,7 +116,7 @@ export async function runReconciliation(
   }
   tierCounts.set('unresolved', result.exceptions.length)
 
-  return {
+  const payload: RunPayload = {
     runId: `run_${seed}_${Date.now()}`,
     seed,
     datasetId: batch.datasetId,
@@ -126,6 +151,143 @@ export async function runReconciliation(
     }),
     decisions: result.decisions,
     ceiling: report.ledgerCount === 0 ? 0 : report.matchableCount / report.ledgerCount,
+    cashForecast: (() => {
+      const forecast = buildCashForecast(batch, result, IN_FIXED_HOLIDAYS_2026)
+      const c = batch.baseCurrency
+      return {
+        asOf: forecast.asOf,
+        collectionLagDays: forecast.collectionLagDays,
+        lagSampleSize: forecast.lagSampleSize,
+        confirmedMinor: formatMinor(forecast.confirmedMinor, c),
+        openReceivablesMinor: formatMinor(forecast.openReceivablesMinor, c),
+        weeks: forecast.weeks.map((w) => ({
+          weekIndex: w.weekIndex,
+          weekStart: w.weekStart,
+          confirmed: formatMinor(w.confirmedMinor, c),
+          projected: formatMinor(w.projectedMinor, c),
+          cumulative: formatMinor(w.cumulativeMinor, c),
+          bandLow: formatMinor(w.bandLowMinor, c),
+          bandHigh: formatMinor(w.bandHighMinor, c),
+          confirmedValue: Number(w.confirmedMinor) / 100,
+          projectedValue: Number(w.projectedMinor) / 100,
+          cumulativeValue: Number(w.cumulativeMinor) / 100,
+          bandLowValue: Number(w.bandLowMinor) / 100,
+          bandHighValue: Number(w.bandHighMinor) / 100,
+        })),
+      }
+    })(),
+  }
+
+  // Fire-and-forget: notifySlack() itself never throws (see lib/tools/actions/slack.ts)
+  // and no-ops silently when SLACK_WEBHOOK_URL isn't set, so this never affects the run.
+  await notifySlack(
+    `Simply Cashify run ${payload.runId}: auto-cleared ${(report.operating.autoClearRate * 100).toFixed(1)}% ` +
+      `at ${(report.operating.precision * 100).toFixed(1)}% precision, ${payload.exceptions.length} exceptions routed for review.`,
+  )
+
+  return payload
+}
+
+/**
+ * An uploaded batch carries no ground truth — there is no answer key to
+ * score matches against, so this payload reports what the engine decided
+ * (matches, exceptions, tiers, the full audit trail, a cash forecast) and
+ * deliberately has no `report`, `ablation`, or `ceiling` field. Fabricating
+ * a precision number against an unknown answer would be exactly the kind of
+ * claim this project refuses to make elsewhere.
+ */
+export type UploadRunPayload = {
+  runId: string
+  datasetId: string
+  createdAt: string
+  recordCounts: { bank: number; settlements: number; ledger: number }
+  stats: ReconcileResult['stats']
+  agentTier: ReconcileResult['agentTier']
+  tierBreakdown: { tier: string; count: number }[]
+  exceptions: RunPayload['exceptions']
+  matches: { ledgerId: string; paymentIds: string[]; tier: string; confidence: number; amount: string; counterparty?: string }[]
+  decisions: ReconcileResult['decisions']
+  cashForecast: RunPayload['cashForecast']
+}
+
+export async function runReconciliationFromBatch(
+  batch: import('../datasets/canonical').CanonicalBatch,
+): Promise<UploadRunPayload> {
+  const result = await reconcile(batch)
+
+  const ledgerById = new Map(batch.ledger.map((l) => [l.id, l]))
+  const bankById = new Map(batch.bank.map((b) => [b.id, b]))
+
+  const tierCounts = new Map<string, number>()
+  for (const m of result.matches) {
+    tierCounts.set(m.tier, (tierCounts.get(m.tier) ?? 0) + 1)
+  }
+  tierCounts.set('unresolved', result.exceptions.length)
+
+  const forecast = buildCashForecast(batch, result, IN_FIXED_HOLIDAYS_2026)
+  const c = batch.baseCurrency
+
+  await notifySlack(
+    `Simply Cashify: uploaded batch reconciled — ${result.matches.length} matched, ` +
+      `${result.exceptions.length} exceptions routed for review.`,
+  )
+
+  return {
+    runId: `upload_${Date.now()}`,
+    datasetId: batch.datasetId,
+    createdAt: new Date().toISOString(),
+    recordCounts: {
+      bank: batch.bank.length,
+      settlements: batch.settlements.length,
+      ledger: batch.ledger.length,
+    },
+    stats: result.stats,
+    agentTier: result.agentTier,
+    tierBreakdown: [...tierCounts].map(([tier, count]) => ({ tier, count })),
+    exceptions: result.exceptions.map((e, i) => {
+      const rec = e.ledgerId ? ledgerById.get(e.ledgerId) : bankById.get(e.bankId ?? '')
+      return {
+        id: e.ledgerId ?? e.bankId ?? `exc_${i}`,
+        reason: e.reason,
+        detail: e.detail,
+        rationale: e.rationale,
+        side: e.ledgerId ? ('ledger' as const) : ('bank' as const),
+        record: rec ? summarize(rec) : undefined,
+      }
+    }),
+    matches: result.matches.map((m) => {
+      const rec = ledgerById.get(m.ledgerId)
+      return {
+        ledgerId: m.ledgerId,
+        paymentIds: m.paymentIds,
+        tier: m.tier,
+        confidence: m.confidence,
+        amount: rec ? formatMinor(rec.amount, rec.currency) : '—',
+        counterparty: rec?.counterparty,
+      }
+    }),
+    decisions: result.decisions,
+    cashForecast: {
+      asOf: forecast.asOf,
+      collectionLagDays: forecast.collectionLagDays,
+      lagSampleSize: forecast.lagSampleSize,
+      confirmedMinor: formatMinor(forecast.confirmedMinor, c),
+      openReceivablesMinor: formatMinor(forecast.openReceivablesMinor, c),
+      weeks: forecast.weeks.map((w) => ({
+        weekIndex: w.weekIndex,
+        weekStart: w.weekStart,
+        confirmed: formatMinor(w.confirmedMinor, c),
+        projected: formatMinor(w.projectedMinor, c),
+        cumulative: formatMinor(w.cumulativeMinor, c),
+        bandLow: formatMinor(w.bandLowMinor, c),
+        bandHigh: formatMinor(w.bandHighMinor, c),
+        confirmedValue: Number(w.confirmedMinor) / 100,
+        projectedValue: Number(w.projectedMinor) / 100,
+        cumulativeValue: Number(w.cumulativeMinor) / 100,
+        bandLowValue: Number(w.bandLowMinor) / 100,
+        bandHighValue: Number(w.bandHighMinor) / 100,
+      })),
+    },
   }
 }
 

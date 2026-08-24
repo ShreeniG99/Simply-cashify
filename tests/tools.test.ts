@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import '@/lib/tools/index' // registers fx.convert, calendar.isBusinessDay, bank.lookupIFSC
+import '@/lib/tools/index' // registers fx.convert, calendar.isBusinessDay, bank.lookupIFSC, slack.notify
 import { getTool, listTools, toolStatusReport } from '@/lib/tools/registry'
 import type { FxToolInput, FxToolOutput } from '@/lib/tools/enrich/fx'
 import type { CalendarToolInput, CalendarToolOutput } from '@/lib/tools/enrich/calendar'
 import type { IfscToolInput, IfscInfo } from '@/lib/tools/enrich/ifsc'
+import type { SlackNotifyInput, SlackNotifyOutput } from '@/lib/tools/actions/slack'
 import { convertToInr, FX_FIXTURE } from '@/lib/tools/enrich/fx'
 import { CALENDAR_FIXTURE_IN_2026 } from '@/lib/tools/enrich/calendar'
 import { IN_FIXED_HOLIDAYS_2026, isBusinessDay } from '@/lib/util/dates'
@@ -11,18 +12,22 @@ import { IFSC_FIXTURE } from '@/lib/tools/enrich/ifsc'
 import { attemptLive } from '@/lib/tools/fixtures/cassette'
 
 const originalFetch = global.fetch
+const originalSlackWebhook = process.env.SLACK_WEBHOOK_URL
 
 afterEach(() => {
   global.fetch = originalFetch
   vi.restoreAllMocks()
+  if (originalSlackWebhook === undefined) delete process.env.SLACK_WEBHOOK_URL
+  else process.env.SLACK_WEBHOOK_URL = originalSlackWebhook
 })
 
 describe('registry', () => {
-  it('registers all three step-3 connectors', () => {
+  it('registers all three step-3 connectors plus the step-7 Slack action', () => {
     const names = listTools().map((t) => t.name)
     expect(names).toContain('fx.convert')
     expect(names).toContain('calendar.isBusinessDay')
     expect(names).toContain('bank.lookupIFSC')
+    expect(names).toContain('slack.notify')
   })
 
   it('every tool exposes a JSON-schema-shaped input description', () => {
@@ -195,6 +200,64 @@ describe('bank.lookupIFSC', () => {
     const tool = getTool<IfscToolInput, IfscInfo>('bank.lookupIFSC')!
     const result = await tool.handler({ ifsc: 'HDFC0000001' })
     expect(result.mode).toBe('fixture')
+  })
+})
+
+describe('slack.notify', () => {
+  it('reports unconfigured, not a failed attempt, when no webhook URL is set', async () => {
+    delete process.env.SLACK_WEBHOOK_URL
+    const tool = getTool<SlackNotifyInput, SlackNotifyOutput>('slack.notify')!
+    const result = await tool.handler({ text: 'run finished' })
+    expect(result.mode).toBe('unconfigured')
+    expect(result.data).toBeNull()
+    // Never even attempts a network call when there is nowhere configured to send it.
+    const fetchSpy = vi.fn()
+    global.fetch = fetchSpy as unknown as typeof fetch
+    await tool.handler({ text: 'run finished' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('posts for real when a webhook URL is configured, and reports mode "live"', async () => {
+    process.env.SLACK_WEBHOOK_URL = 'https://hooks.slack.test/T000/B000/xxx'
+    const fetchSpy = vi.fn(async () => ({ ok: true }))
+    global.fetch = fetchSpy as unknown as typeof fetch
+
+    const tool = getTool<SlackNotifyInput, SlackNotifyOutput>('slack.notify')!
+    const result = await tool.handler({ text: 'INV-2841 flagged as an exception' })
+
+    expect(result.mode).toBe('live')
+    expect(result.data).toEqual({ posted: true })
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://hooks.slack.test/T000/B000/xxx',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    const calls = fetchSpy.mock.calls as unknown as [string, RequestInit][]
+    const body = JSON.parse(calls[0][1].body as string)
+    expect(body.text).toBe('INV-2841 flagged as an exception')
+  })
+
+  it('reports the failure honestly, still labeled live (a real attempt was made), when the POST fails', async () => {
+    process.env.SLACK_WEBHOOK_URL = 'https://hooks.slack.test/T000/B000/xxx'
+    global.fetch = vi.fn(async () => {
+      throw new Error('CONNECT tunnel failed, response 403')
+    }) as unknown as typeof fetch
+
+    const tool = getTool<SlackNotifyInput, SlackNotifyOutput>('slack.notify')!
+    const result = await tool.handler({ text: 'x' })
+    expect(result.mode).toBe('live')
+    expect(result.data).toBeNull()
+    expect(result.reason).toContain('403')
+  })
+
+  it('status() never fires a live POST just to check — it would spam a real channel', async () => {
+    process.env.SLACK_WEBHOOK_URL = 'https://hooks.slack.test/T000/B000/xxx'
+    const fetchSpy = vi.fn()
+    global.fetch = fetchSpy as unknown as typeof fetch
+
+    const tool = getTool<SlackNotifyInput, SlackNotifyOutput>('slack.notify')!
+    const mode = await tool.status()
+    expect(mode).toBe('live')
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
 

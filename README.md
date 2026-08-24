@@ -68,6 +68,10 @@ cp .env.example .env.local
 Without a key, the app runs fully — tier 4 is skipped and reported honestly as
 `agentTier: "skipped_no_key"` rather than faked.
 
+Also optional: `SLACK_WEBHOOK_URL`, for a one-line notification when a run
+finishes. Without it, `slack.notify` reports `unconfigured` honestly and the
+dashboard never blocks on it.
+
 ---
 
 ## Commands
@@ -77,7 +81,7 @@ Without a key, the app runs fully — tier 4 is skipped and reported honestly as
 | `npm run dev` | Dev server with hot reload, on port 3000 |
 | `npm run build` | Production build |
 | `npm start` | Serve the production build (run `build` first) |
-| `npm test` | Run the test suite (99 tests) |
+| `npm test` | Run the test suite (164 tests) |
 | `npm run typecheck` | TypeScript check with no build |
 | `npm run bench` | Benchmark to the console — the numbers you cite |
 | `npm run fetch:berka` | Downloads the real Berka dataset (~67MB) |
@@ -201,13 +205,15 @@ logic manufactures a false exception for every one.
 app/          Next.js App Router — dashboard and API routes
 components/   UI, in the DECLUTTR design system
 lib/
-  datasets/   canonical schema, generator, ground truth
+  datasets/   canonical schema, generator, ground truth, BYO-CSV adapter
   engine/     matching tiers, tie-out, fee maths, pipeline
   eval/       scoring and ablation
-  tools/      connectors (FX today; calendar and IFSC next)
+  forecast/   cash position projection
+  tools/      connectors (FX, calendar, IFSC) + the Slack action
+  qa/         Settlement Q&A retrieval and template answers
   util/       RNG, holiday-aware date maths
 scripts/      bench CLI
-tests/        50 tests
+tests/        164 tests
 ```
 
 Two structural rules the code holds to:
@@ -223,12 +229,16 @@ assertion in `tests/truth-isolation.test.ts` rather than by convention.
 
 ## Status
 
-Steps 1–4 of 9 complete, plus the Berka scale benchmark pulled forward from
+Steps 1–7 of 9 complete, plus the Berka scale benchmark pulled forward from
 step 8. Working end-to-end: generator, exact/fuzzy/optimal-assignment matching,
 three-way tie-out, fee verification, multi-seed ablation, audit trail,
-dashboard, tool registry, LLM adjudication — and a second, real-data pipeline
-proving **109,521 records/sec** across the full 1,062,791-row Berka dataset
-(`npm run bench:berka`; see `DATA.md`).
+dashboard, tool registry, LLM adjudication, Settlement Q&A, cash forecast,
+BYO-CSV upload, a Slack action, and an integrations panel — plus a second,
+real-data pipeline proving **109,521 records/sec** across the full
+1,062,791-row Berka dataset (`npm run bench:berka`; see `DATA.md`).
+
+Remaining: steps 8 (BenchRec adapter, Razorpay test-mode API — Berka itself is
+already done) and 9 (MCP server) are both explicitly optional per the plan.
 
 Measured, not assumed: the multi-seed ablation showed the optimal-assignment
 tier does not move accuracy on this data (see `lib/eval/ablation.ts`) — kept
@@ -315,7 +325,62 @@ Same helper feeds both the Q&A answer and a new line in the decision drawer,
 so the two surfaces can't drift apart on this. Visually verified in both
 places via a real server run + Playwright screenshot after the fix.
 
-140 tests pass. Build and typecheck clean.
+### Step 7 — polish: cash panel, BYO-CSV, Slack, integrations panel, responsive
 
-Next: exception copy in a controller's voice, then streaming UI, then the
-remaining "polish" items — cash panel, BYO-CSV, Slack, integrations panel.
+**Cash position** (`lib/forecast/cash.ts`, `components/CashPanel.tsx`) — 13
+weekly buckets, only possible because reconciliation already ran. Week 0 is
+the cash this run just confirmed (matched invoices); every week after
+projects the still-open invoices (this run's own ledger-side exceptions)
+forward using a collection lag *learned from this run's own matched
+population*, not an assumed constant. Stated plainly, not buried: "today" is
+the latest invoice date the run saw, not a real wall clock, since a synthetic
+historical batch has no wall clock to read; and the widening confidence band
+is a linear placeholder, not a fitted variance model — a few hundred matched
+invoices per run is too small a sample to fit one honestly.
+
+**BYO-CSV** (`lib/datasets/csvAdapter.ts`, `components/UploadPanel.tsx`,
+`/api/upload`) — the architectural claim "adding a dataset means writing one
+adapter, not touching the engine" made real: drop a CSV with a `source`
+column (`bank`/`settlement`/`ledger`) and canonical field names, and it runs
+through the exact same `reconcile()` the generator path uses. Deliberately
+not a raw-bank-statement-format detector — guessing an unfamiliar export's
+column layout would be the same kind of fabrication this project refuses
+elsewhere, so a malformed file gets a specific, typed error instead of a
+best-effort guess. An uploaded batch has no ground truth, so its payload
+(`UploadRunPayload`) has no `report`, `ablation`, or `ceiling` field at all —
+it shows what the engine decided (matches, exceptions, tiers, the audit
+trail, a cash forecast), never a precision claim against an unknown answer.
+
+**Slack** (`lib/tools/actions/slack.ts`) — the tool belt's one action tool,
+registered alongside the read connectors but shaped differently: an outbound
+webhook POST has no fixture to replay (a "recorded" Slack post is a
+contradiction), so this tool only ever reports `live` or `unconfigured`,
+never `fixture`. Its `status()` also deliberately never fires a real test
+message to check — unlike the read connectors' idempotent GET-based status
+checks, probing this one for real would post to a real channel on every
+dashboard load. Fires a one-line summary after a generator run and after a
+CSV upload; a missing `SLACK_WEBHOOK_URL` no-ops silently rather than
+blocking the run.
+
+**Integrations panel** (`components/IntegrationsPanel.tsx`, `/api/tools`) —
+adds no new status logic, it just makes `toolStatusReport()` (already the
+single source of truth every connector self-reports through) visible: a
+live/fixture/unconfigured dot per registered tool, including the new Slack
+action.
+
+**Responsive pass** — verified with a real Playwright run at a 390px
+viewport rather than assumed from the existing `sm:`/`lg:` breakpoints. Caught
+one real overflow while doing it: the integrations panel's status label
+(`shrink-0`, a genuinely long string like "fixture — recorded cassette, no
+network reachable") forced its flex row past the viewport edge on a phone
+width — a 27px horizontal scroll on the whole page. Fixed by letting that row
+wrap instead of forcing every child onto one line; re-verified `scrollWidth
+== clientWidth` at 390px afterward, not just visually.
+
+164 tests pass. Build and typecheck clean.
+
+Two backlog items are intentionally not part of this step — they were never
+in the plan's step 7 scope, only raised earlier as ideas: rewriting exception
+copy in a controller's voice, and streaming tier-by-tier progress during a
+run (the latter would need the pipeline to emit progress over a stream, a
+real API-contract change, not a polish-sized one).

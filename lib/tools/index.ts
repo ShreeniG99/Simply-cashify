@@ -8,6 +8,7 @@
 import './enrich/fx'
 import './enrich/calendar'
 import './enrich/ifsc'
+import './actions/slack'
 
 export { registerTool, getTool, listTools, toolStatusReport } from './registry'
 export type { ToolSpec, ToolResult, ToolMode, ToolStatusReport } from './registry'

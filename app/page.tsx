@@ -8,6 +8,9 @@ import { ScoreRing } from '@/components/ScoreRing'
 import { DecisionDrawer } from '@/components/DecisionDrawer'
 import { CalibrationChart } from '@/components/CalibrationChart'
 import { SettlementQA } from '@/components/SettlementQA'
+import { CashPanel } from '@/components/CashPanel'
+import { UploadPanel } from '@/components/UploadPanel'
+import { IntegrationsPanel } from '@/components/IntegrationsPanel'
 import { Card, CardTitle, ReasonBadge, ScrollX, Stat, TierBadge, pct } from '@/components/ui'
 
 export default function Page() {
@@ -18,6 +21,7 @@ export default function Page() {
   const [seed, setSeed] = useState('42')
   const [invoiceCount, setInvoiceCount] = useState('180')
   const [drawer, setDrawer] = useState<DecisionRecord | null>(null)
+  const [hasUploaded, setHasUploaded] = useState(false)
 
   async function go() {
     setBusy(true)
@@ -87,7 +91,11 @@ export default function Page() {
         {error && <p className="mt-4 font-mono text-xs text-danger">{error}</p>}
       </Card>
 
-      {!run && !busy && (
+      <Card>
+        <UploadPanel onResult={() => setHasUploaded(true)} />
+      </Card>
+
+      {!run && !busy && !hasUploaded && (
         <Card>
           <p className="font-mono text-sm leading-relaxed text-text-secondary">
             Reconciles a bank statement against a Razorpay settlement report and an
@@ -371,6 +379,13 @@ export default function Page() {
             <SettlementQA run={run} />
           </Card>
 
+          <Card>
+            <CardTitle hint="Weekly buckets, not a calendar. Only possible because reconciliation already ran — see the panel for how confirmed cash and projected receivables are derived.">
+              Cash position
+            </CardTitle>
+            <CashPanel forecast={run.cashForecast} />
+          </Card>
+
           <details className="rounded-xl border border-border bg-surface p-5">
             <summary className="cursor-pointer font-serif text-lg text-text-primary">
               Matched records ({run.matches.length})
@@ -429,6 +444,13 @@ export default function Page() {
           </details>
         </>
       )}
+
+      <Card>
+        <CardTitle hint="Every tool this app can call, self-reported — never fabricated. live means it just reached the real service; fixture means it fell back to a recorded cassette; unconfigured means no key or webhook is set at all.">
+          Integrations
+        </CardTitle>
+        <IntegrationsPanel />
+      </Card>
 
       <DecisionDrawer
         decision={drawer}
