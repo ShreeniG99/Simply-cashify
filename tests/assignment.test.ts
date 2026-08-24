@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { solveAssignment, solveMaxScore } from '@/lib/engine/assign'
 import { generate } from '@/lib/datasets/generate'
 import { reconcile } from '@/lib/engine/pipeline'
@@ -126,15 +126,19 @@ describe('assignment solver', () => {
 
 describe('assignment in the pipeline', () => {
   const { batch, truth } = generate({ seed: 42 })
+  let greedy: ReturnType<typeof score>
+  let optimal: ReturnType<typeof score>
 
-  const greedy = score(
-    reconcile(batch, { config: { ...DEFAULT_CONFIG, enableAssignment: false } }),
-    truth,
-  )
-  const optimal = score(
-    reconcile(batch, { config: { ...DEFAULT_CONFIG, enableAssignment: true } }),
-    truth,
-  )
+  beforeAll(async () => {
+    const greedyResult = await reconcile(batch, {
+      config: { ...DEFAULT_CONFIG, enableAssignment: false },
+    })
+    const optimalResult = await reconcile(batch, {
+      config: { ...DEFAULT_CONFIG, enableAssignment: true },
+    })
+    greedy = score(greedyResult, truth)
+    optimal = score(optimalResult, truth)
+  })
 
   it('holds the precision target', () => {
     expect(optimal.operating.precision).toBeGreaterThanOrEqual(0.995)
@@ -165,8 +169,8 @@ describe('assignment in the pipeline', () => {
     expect(after.correct).toBeGreaterThanOrEqual(before.correct - 1)
   })
 
-  it('labels its matches as the assignment tier so the audit trail is honest', () => {
-    const result = reconcile(batch, { config: { enableAssignment: true } })
-    expect(result.matches.some((m) => m.tier === 'assignment')).toBe(true)
+  it('labels its matches as the assignment tier so the audit trail is honest', async () => {
+    const result = await reconcile(batch, { config: { enableAssignment: true } })
+    expect(result.matches.some((m: { tier: string }) => m.tier === 'assignment')).toBe(true)
   })
 })

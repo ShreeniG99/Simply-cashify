@@ -56,6 +56,20 @@ Open <http://localhost:3000> and click **Run reconciliation**.
 
 ---
 
+## Environment variables
+
+Copy `.env.example` to `.env.local` to enable tier 4 (LLM adjudication):
+
+```bash
+cp .env.example .env.local
+# then fill in GROQ_API_KEY from https://console.groq.com/keys (free tier)
+```
+
+Without a key, the app runs fully — tier 4 is skipped and reported honestly as
+`agentTier: "skipped_no_key"` rather than faked.
+
+---
+
 ## Commands
 
 | Command | What it does |
@@ -209,11 +223,11 @@ assertion in `tests/truth-isolation.test.ts` rather than by convention.
 
 ## Status
 
-Steps 1–3 of 9 complete, plus the Berka scale benchmark pulled forward from
+Steps 1–4 of 9 complete, plus the Berka scale benchmark pulled forward from
 step 8. Working end-to-end: generator, exact/fuzzy/optimal-assignment matching,
 three-way tie-out, fee verification, multi-seed ablation, audit trail,
-dashboard, tool registry — and a second, real-data pipeline proving
-**109,521 records/sec** across the full 1,062,791-row Berka dataset
+dashboard, tool registry, LLM adjudication — and a second, real-data pipeline
+proving **109,521 records/sec** across the full 1,062,791-row Berka dataset
 (`npm run bench:berka`; see `DATA.md`).
 
 Measured, not assumed: the multi-seed ablation showed the optimal-assignment
@@ -228,5 +242,24 @@ engine's own fast path can never disagree. `live` mode is real, tested code
 (via a mocked `fetch`) but unverified against the actual internet — this
 build environment's egress proxy blocks all three target hosts; see `DATA.md`.
 
-Next: the Groq adjudication tier (step 4), then the ablation/calibration proof
-step, then exception copy and streaming UI.
+### Tier 4 — LLM adjudication (`lib/engine/adjudicate.ts`)
+
+The genuinely ambiguous residual from tiers 1–3 goes to an LLM agent (Groq's
+`openai/gpt-oss-120b` — not `llama-3.3-70b-versatile`, which Groq's own docs
+list for migration). The agent gets the step-3 connectors as investigation
+tools (`fx.convert`, `calendar.isBusinessDay`, `bank.lookupIFSC`) plus
+`ledger.search`, and must conclude with `propose_match` or `flag_exception` —
+the system prompt is explicit that declining is success, not failure, given a
+wrong auto-approved match is the expensive, invisible failure mode this whole
+project exists to avoid.
+
+`reconcile()` is now async throughout the codebase. No `GROQ_API_KEY` is set in
+this build environment (nor is `api.groq.com` reachable through its egress
+proxy — confirmed, same denial as the step-3 hosts), so `agentTier` correctly
+reports `skipped_no_key` here rather than fabricating a result. The agent loop
+itself — tool-calling, refusal to guess, malformed-arguments handling,
+mid-call network failure, the `maxAgentRecords` cost cap — is exercised in
+`tests/adjudicate.test.ts` against a scripted mock `LLMClient`, independent of
+whether a real key is ever configured.
+
+Next: the ablation/calibration proof step, then exception copy and streaming UI.

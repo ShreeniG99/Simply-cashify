@@ -16,7 +16,7 @@ const TRUTH_MODULE = path.join(ROOT, 'lib/datasets/truth.ts')
 const BERKA_TRUTH_MODULE = path.join(ROOT, 'lib/datasets/berka/truth.ts')
 
 /** Entry points that must never reach ground truth. */
-const BLIND_ENTRYPOINTS = ['lib/engine/pipeline.ts']
+const BLIND_ENTRYPOINTS = ['lib/engine/pipeline.ts', 'lib/engine/adjudicate.ts']
 const BERKA_BLIND_ENTRYPOINTS = ['lib/engine/berkaMatch.ts', 'lib/datasets/berka/adapter.ts']
 
 const IMPORT_RE = /(?:^|\n)\s*(?:import|export)[\s\S]*?from\s+['"]([^'"]+)['"]/g

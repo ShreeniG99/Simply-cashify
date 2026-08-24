@@ -21,7 +21,7 @@ export async function POST(request: Request) {
       : undefined
 
   try {
-    const payload = runReconciliation({ seed, invoiceCount })
+    const payload = await runReconciliation({ seed, invoiceCount })
     return NextResponse.json(payload)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Reconciliation failed'

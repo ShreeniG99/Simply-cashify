@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { score, scoreAtThreshold } from '@/lib/eval/score'
 import type { ReconcileResult } from '@/lib/engine/types'
 import type { GroundTruth } from '@/lib/datasets/truth'
@@ -94,8 +94,13 @@ describe('scorer', () => {
 
 describe('end-to-end on generated data', () => {
   const { batch, truth } = generate({ seed: 42 })
-  const result = reconcile(batch)
-  const report = score(result, truth)
+  let result: Awaited<ReturnType<typeof reconcile>>
+  let report: ReturnType<typeof score>
+
+  beforeAll(async () => {
+    result = await reconcile(batch)
+    report = score(result, truth)
+  })
 
   it('never auto-approves a wrong match at the operating point', () => {
     // A wrong auto-approved match is the expensive, invisible failure. It is
@@ -132,11 +137,15 @@ describe('end-to-end on generated data', () => {
 
 describe('ablation', () => {
   const { batch, truth } = generate({ seed: 42 })
+  let rungs: { label: string; report: ReturnType<typeof score> }[]
 
-  const rungs = ABLATION_RUNGS.map((rung) => ({
-    label: rung.label,
-    report: score(reconcile(batch, { config: rung.overrides }), truth),
-  }))
+  beforeAll(async () => {
+    rungs = []
+    for (const rung of ABLATION_RUNGS) {
+      const result = await reconcile(batch, { config: rung.overrides })
+      rungs.push({ label: rung.label, report: score(result, truth) })
+    }
+  })
 
   it('every rung holds the precision target — capability adds coverage, not risk', () => {
     for (const r of rungs) {

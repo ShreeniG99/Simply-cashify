@@ -55,16 +55,22 @@ export type RunPayload = {
   ceiling: number
 }
 
-export function runReconciliation(opts: { seed?: number; invoiceCount?: number } = {}): RunPayload {
+export async function runReconciliation(
+  opts: { seed?: number; invoiceCount?: number } = {},
+): Promise<RunPayload> {
   const seed = opts.seed ?? Math.floor(Math.random() * 100000)
   const { batch, truth } = generate({ seed, invoiceCount: opts.invoiceCount })
-  const result = reconcile(batch)
+  const result = await reconcile(batch)
   const report = score(result, truth)
 
-  const ablation: AblationRow[] = ABLATION_RUNGS.map((rung) => {
-    const r = reconcile(batch, { config: rung.overrides })
+  // Sequential, not Promise.all: the LLM-adjudication rung makes real API
+  // calls when a key is configured, and running six rungs concurrently would
+  // multiply concurrent Groq requests against a free tier limited to ~30 RPM.
+  const ablation: AblationRow[] = []
+  for (const rung of ABLATION_RUNGS) {
+    const r = await reconcile(batch, { config: rung.overrides })
     const s = score(r, truth)
-    return {
+    ablation.push({
       label: rung.label,
       precision: s.operating.precision,
       recall: s.operating.recall,
@@ -72,8 +78,8 @@ export function runReconciliation(opts: { seed?: number; invoiceCount?: number }
       autoClearRate: s.operating.autoClearRate,
       falseExceptions: s.operating.falseExceptions,
       wrongMatches: s.operating.wrongMatches,
-    }
-  })
+    })
+  }
 
   const ledgerById = new Map(batch.ledger.map((l) => [l.id, l]))
   const bankById = new Map(batch.bank.map((b) => [b.id, b]))

@@ -25,7 +25,7 @@ function commitHash(): string {
   }
 }
 
-const run = runReconciliation({ seed, invoiceCount })
+const run = await runReconciliation({ seed, invoiceCount })
 const op = run.report.operating
 
 console.log('')
@@ -52,6 +52,13 @@ console.log(`  records                ${run.stats.recordCount}`)
 console.log(`  wall clock             ${run.stats.wallClockMs}ms`)
 console.log(`  rate                   ${run.stats.recordsPerSecond.toLocaleString()} rec/s`)
 console.log(`  agent tier             ${run.agentTier}`)
+if (run.stats.llmTouchRate > 0) {
+  console.log(
+    `  LLM touch rate         ${pctString(run.stats.llmTouchRate)}  ` +
+      `(${run.stats.tokensUsed.toLocaleString()} tokens, $${run.stats.estimatedCostUsd.toFixed(4)}, ` +
+      `p50 ${run.stats.latencyP50Ms}ms / p95 ${run.stats.latencyP95Ms}ms)`,
+  )
+}
 console.log('')
 
 console.log(`ABLATION (seed ${run.seed})`)
@@ -70,7 +77,7 @@ console.log('')
 
 // A single seed cannot separate a real effect from noise, so the headline
 // ablation is the multi-seed one.
-const seeded = runSeededAblation()
+const seeded = await runSeededAblation()
 console.log(`ABLATION ACROSS ${seeded.seeds.length} SEEDS  [${seeded.seeds.join(', ')}]`)
 console.log('  config                     mean recall   (min–max)      ±sd      gain')
 for (const r of seeded.rows) {

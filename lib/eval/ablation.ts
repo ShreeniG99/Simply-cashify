@@ -52,9 +52,9 @@ function stdDev(xs: number[]): number {
   return Math.sqrt(mean(xs.map((x) => (x - m) ** 2)))
 }
 
-export function runSeededAblation(
+export async function runSeededAblation(
   opts: { seeds?: number[]; invoiceCount?: number } = {},
-): SeededAblation {
+): Promise<SeededAblation> {
   const seeds = opts.seeds ?? DEFAULT_SEEDS
 
   // rung index -> per-seed metrics
@@ -81,7 +81,7 @@ export function runSeededAblation(
     let previousRecall: number | null = null
 
     for (let i = 0; i < ABLATION_RUNGS.length; i++) {
-      const result = reconcile(batch, { config: ABLATION_RUNGS[i].overrides })
+      const result = await reconcile(batch, { config: ABLATION_RUNGS[i].overrides })
       const s = score(result, truth).operating
 
       perRung[i].precision.push(s.precision)

@@ -21,6 +21,16 @@ export type MatchConfig = {
   /** Minimum confidence for the fuzzy tier to claim a match. */
   fuzzyAcceptThreshold: number
 
+  /**
+   * Cap on how many residual records the agent tier will actually process in
+   * one run, highest automated confidence first. Bounds real API cost and
+   * free-tier rate limits (~30 RPM on Groq) — a single dashboard run stays
+   * well under the cap; see the much lower override on the ablation rung
+   * below, which fires the agent across an 8-seed sweep and would otherwise
+   * multiply real API calls by 8x.
+   */
+  maxAgentRecords: number
+
   // ---- ablation switches ----
   enableFuzzy: boolean
   /** When false, date windows count weekends/holidays as ordinary days. */
@@ -41,6 +51,7 @@ export const DEFAULT_CONFIG: MatchConfig = {
   // candidates is text and timing — hence the heavier date weight.
   signalWeights: { string: 0.5, amount: 0.2, date: 0.3 },
   fuzzyAcceptThreshold: 0.72,
+  maxAgentRecords: 20,
   enableFuzzy: true,
   enableHolidayAwareness: true,
   enableAssignment: true,
@@ -108,6 +119,11 @@ export const ABLATION_RUNGS: { label: string; overrides: Partial<MatchConfig> }[
       enableAssignment: true,
       enableAgent: true,
       enableFx: true,
+      // This rung fires across an 8-seed sweep in the seeded ablation
+      // (lib/eval/ablation.ts). Without a much lower cap here, that sweep
+      // would multiply real API calls by 8x against a free tier limited to
+      // ~30 RPM. A single dashboard run keeps the full DEFAULT_CONFIG cap.
+      maxAgentRecords: 5,
     },
   },
 ]

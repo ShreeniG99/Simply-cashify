@@ -25,6 +25,9 @@ import {
 import { tieOut } from './tieout'
 import { isValidIfsc } from './strings'
 import { convertToInr } from '../tools/enrich/fx'
+import { runAdjudication, type ResidualCase } from './adjudicate'
+import { createGroqClientFromEnv } from '../llm/groq'
+import type { LLMClient } from '../llm/client'
 import type {
   DecisionRecord,
   ExceptionReason,
@@ -36,9 +39,14 @@ import type {
 
 export type ReconcileOptions = {
   config?: Partial<MatchConfig>
+  /** Injected for tests; production code omits this and reads GROQ_API_KEY. */
+  llmClient?: LLMClient | null
 }
 
-export function reconcile(batch: CanonicalBatch, opts: ReconcileOptions = {}): ReconcileResult {
+export async function reconcile(
+  batch: CanonicalBatch,
+  opts: ReconcileOptions = {},
+): Promise<ReconcileResult> {
   const cfg: MatchConfig = { ...DEFAULT_CONFIG, ...opts.config }
   const started = Date.now()
 
@@ -99,12 +107,73 @@ export function reconcile(batch: CanonicalBatch, opts: ReconcileOptions = {}): R
     })
   }
 
-  // ---- Exceptions: everything Stage B could not resolve ----
+  // ---- Tier 4: LLM adjudication over whatever tiers 1-3 could not resolve ----
   const matchedLedger = new Set(matches.map((m) => m.ledgerId))
   const exceptions: ReconExceptionRecord[] = []
+  const agentExceptionIds = new Set<string>()
 
+  const llmClient = opts.llmClient !== undefined ? opts.llmClient : cfg.enableAgent ? createGroqClientFromEnv() : null
+  const agentTier: ReconcileResult['agentTier'] = !cfg.enableAgent
+    ? 'skipped_disabled'
+    : llmClient
+      ? 'ran'
+      : 'skipped_no_key'
+
+  let agentTokens = 0
+  let agentCostUsd = 0
+  let agentLatencies: number[] = []
+
+  if (agentTier === 'ran' && llmClient) {
+    const residuals: ResidualCase[] = ledger
+      .filter((l) => !matchedLedger.has(l.id))
+      .map((l) => ({
+        ledger: l,
+        candidates: (byLedger.get(l.id) ?? []).slice().sort((a, b) => b.confidence - a.confidence),
+      }))
+
+    const summary = await runAdjudication(residuals, payments, llmClient, cfg)
+    agentTokens = summary.totalTokens
+    agentCostUsd = summary.estimatedCostUsd
+    agentLatencies = summary.latencies
+
+    for (const r of summary.results) {
+      if (r.outcome === 'not_reached') continue
+
+      if (r.outcome === 'matched') {
+        matches.push({ ledgerId: r.ledgerId, paymentIds: [r.paymentId], tier: 'agent', confidence: r.confidence })
+        matchedLedger.add(r.ledgerId)
+        decisions.push({
+          subjectId: r.ledgerId,
+          tier: 'agent',
+          outcome: 'matched',
+          confidence: r.confidence,
+          evidence: [r.rationale],
+          toolsCalled: r.toolsCalled,
+          alternatives: [],
+          latencyMs: r.latencyMs,
+          tokensUsed: r.tokensUsed,
+        })
+      } else {
+        agentExceptionIds.add(r.ledgerId)
+        exceptions.push({ ledgerId: r.ledgerId, reason: r.reason, detail: r.rationale, rationale: r.rationale })
+        decisions.push({
+          subjectId: r.ledgerId,
+          tier: 'exception',
+          outcome: 'exception',
+          confidence: 0,
+          evidence: [r.rationale],
+          toolsCalled: r.toolsCalled,
+          alternatives: [],
+          latencyMs: r.latencyMs,
+          tokensUsed: r.tokensUsed,
+        })
+      }
+    }
+  }
+
+  // ---- Exceptions: everything tiers 1-4 could not resolve ----
   for (const l of ledger) {
-    if (matchedLedger.has(l.id)) continue
+    if (matchedLedger.has(l.id) || agentExceptionIds.has(l.id)) continue
     const cands = (byLedger.get(l.id) ?? []).sort((a, b) => b.confidence - a.confidence)
     const { reason, detail } = classifyException(l, cands, ledger, matchedLedger, unresolvedFx, cfg)
 
@@ -151,19 +220,27 @@ export function reconcile(batch: CanonicalBatch, opts: ReconcileOptions = {}): R
     exceptions,
     tieouts,
     decisions,
-    agentTier: cfg.enableAgent ? 'skipped_no_key' : 'skipped_disabled',
+    agentTier,
     stats: {
       recordCount: total,
       ledgerCount: ledger.length,
       wallClockMs,
       recordsPerSecond: wallClockMs === 0 ? total * 1000 : Math.round((total / wallClockMs) * 1000),
-      llmTouchRate: 0,
-      tokensUsed: 0,
-      estimatedCostUsd: 0,
-      latencyP50Ms: 0,
-      latencyP95Ms: 0,
+      llmTouchRate: ledger.length === 0 ? 0 : agentLatencies.length / ledger.length,
+      tokensUsed: agentTokens,
+      estimatedCostUsd: agentCostUsd,
+      latencyP50Ms: percentile(agentLatencies, 50),
+      latencyP95Ms: percentile(agentLatencies, 95),
     },
   }
+}
+
+/** Nearest-rank percentile over an unsorted array. Empty input -> 0, never NaN. */
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))
+  return sorted[idx]
 }
 
 // ------------------------------------------------------------------ helpers
