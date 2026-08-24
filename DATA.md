@@ -1,5 +1,17 @@
 # Dataset provenance
 
+## Live connectors (step 3)
+
+`api.frankfurter.app`, `date.nager.at`, `ifsc.razorpay.com` are all keyless and
+architecturally supported in `live` mode — but this build environment's egress
+proxy returns a 403 policy denial for all three, confirmed twice (planning
+session and build session, both dated). `live` mode is real code, not a stub:
+`preferLive: true` genuinely attempts the fetch and is exercised in
+`tests/tools.test.ts` via a mocked `fetch`, so the logic is proven correct even
+though it cannot be proven reachable from here. On an unrestricted machine the
+same code path should report `mode: 'live'` — that has not been verified by
+this session and is worth confirming once deployed.
+
 ## Berka / PKDD'99 (real data — scale and correctness proof)
 
 - **Source**: Czech bank, released for the PKDD'99 Discovery Challenge.

@@ -63,7 +63,7 @@ Open <http://localhost:3000> and click **Run reconciliation**.
 | `npm run dev` | Dev server with hot reload, on port 3000 |
 | `npm run build` | Production build |
 | `npm start` | Serve the production build (run `build` first) |
-| `npm test` | Run the test suite (50 tests) |
+| `npm test` | Run the test suite (99 tests) |
 | `npm run typecheck` | TypeScript check with no build |
 | `npm run bench` | Benchmark to the console — the numbers you cite |
 | `npm run fetch:berka` | Downloads the real Berka dataset (~67MB) |
@@ -209,17 +209,24 @@ assertion in `tests/truth-isolation.test.ts` rather than by convention.
 
 ## Status
 
-Steps 1–2 of 9 complete, plus the Berka scale benchmark pulled forward from
+Steps 1–3 of 9 complete, plus the Berka scale benchmark pulled forward from
 step 8. Working end-to-end: generator, exact/fuzzy/optimal-assignment matching,
 three-way tie-out, fee verification, multi-seed ablation, audit trail,
-dashboard — and a second, real-data pipeline proving **109,521 records/sec**
-across the full 1,062,791-row Berka dataset (`npm run bench:berka`; see
-`DATA.md`).
+dashboard, tool registry — and a second, real-data pipeline proving
+**109,521 records/sec** across the full 1,062,791-row Berka dataset
+(`npm run bench:berka`; see `DATA.md`).
 
 Measured, not assumed: the multi-seed ablation showed the optimal-assignment
 tier does not move accuracy on this data (see `lib/eval/ablation.ts`) — kept
 in because a correct null result, reported honestly, is a stronger claim than
 a cherry-picked win.
 
-Next: the connector tool belt (step 3), the Groq adjudication tier (step 4),
-then exception copy and streaming UI (steps in progress).
+The tool registry (`lib/tools/`) wires FX, bank-holiday, and IFSC connectors
+each in three honest modes (`live` / `fixture` / `unconfigured`), sharing their
+fixture data with the synchronous matching engine so an agent tool call and the
+engine's own fast path can never disagree. `live` mode is real, tested code
+(via a mocked `fetch`) but unverified against the actual internet — this
+build environment's egress proxy blocks all three target hosts; see `DATA.md`.
+
+Next: the Groq adjudication tier (step 4), then the ablation/calibration proof
+step, then exception copy and streaming UI.
