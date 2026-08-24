@@ -13,9 +13,11 @@ import path from 'node:path'
 
 const ROOT = path.resolve(__dirname, '..')
 const TRUTH_MODULE = path.join(ROOT, 'lib/datasets/truth.ts')
+const BERKA_TRUTH_MODULE = path.join(ROOT, 'lib/datasets/berka/truth.ts')
 
 /** Entry points that must never reach ground truth. */
 const BLIND_ENTRYPOINTS = ['lib/engine/pipeline.ts']
+const BERKA_BLIND_ENTRYPOINTS = ['lib/engine/berkaMatch.ts', 'lib/datasets/berka/adapter.ts']
 
 const IMPORT_RE = /(?:^|\n)\s*(?:import|export)[\s\S]*?from\s+['"]([^'"]+)['"]/g
 
@@ -63,5 +65,28 @@ describe('ground-truth isolation', () => {
     // If this fails, the walker is broken and the assertions above prove nothing.
     const reachable = transitiveImports(path.join(ROOT, 'lib/datasets/generate.ts'))
     expect(reachable.has(TRUTH_MODULE)).toBe(true)
+  })
+})
+
+describe('Berka ground-truth isolation', () => {
+  it('has a truth module to isolate', () => {
+    expect(existsSync(BERKA_TRUTH_MODULE)).toBe(true)
+  })
+
+  for (const entry of BERKA_BLIND_ENTRYPOINTS) {
+    it(`${entry} cannot reach lib/datasets/berka/truth`, () => {
+      const reachable = transitiveImports(path.join(ROOT, entry))
+      expect(reachable.has(BERKA_TRUTH_MODULE)).toBe(false)
+    })
+  }
+
+  it('the import walker reaches Berka truth from where it legitimately should', () => {
+    const reachable = transitiveImports(path.join(ROOT, 'lib/eval/berkaScore.ts'))
+    // berkaScore.ts takes BerkaTruth as a parameter type but need not import the
+    // module itself if it only imports the type — so instead check the bench
+    // script, which legitimately wires truth in.
+    void reachable
+    const benchReachable = transitiveImports(path.join(ROOT, 'scripts/bench-berka.ts'))
+    expect(benchReachable.has(BERKA_TRUTH_MODULE)).toBe(true)
   })
 })

@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "bench": "tsx scripts/bench.ts"
+    "bench": "tsx scripts/bench.ts",
+    "fetch:berka": "tsx scripts/fetch-berka.ts",
+    "bench:berka": "tsx scripts/bench-berka.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.2",
