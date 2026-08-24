@@ -5,6 +5,7 @@ import type { FxToolInput, FxToolOutput } from '@/lib/tools/enrich/fx'
 import type { CalendarToolInput, CalendarToolOutput } from '@/lib/tools/enrich/calendar'
 import type { IfscToolInput, IfscInfo } from '@/lib/tools/enrich/ifsc'
 import type { SlackNotifyInput, SlackNotifyOutput } from '@/lib/tools/actions/slack'
+import type { RazorpaySettlementsInput, RazorpaySettlementsOutput } from '@/lib/tools/actions/razorpay'
 import { convertToInr, FX_FIXTURE } from '@/lib/tools/enrich/fx'
 import { CALENDAR_FIXTURE_IN_2026 } from '@/lib/tools/enrich/calendar'
 import { IN_FIXED_HOLIDAYS_2026, isBusinessDay } from '@/lib/util/dates'
@@ -13,21 +14,28 @@ import { attemptLive } from '@/lib/tools/fixtures/cassette'
 
 const originalFetch = global.fetch
 const originalSlackWebhook = process.env.SLACK_WEBHOOK_URL
+const originalRazorpayKeyId = process.env.RAZORPAY_KEY_ID
+const originalRazorpayKeySecret = process.env.RAZORPAY_KEY_SECRET
 
 afterEach(() => {
   global.fetch = originalFetch
   vi.restoreAllMocks()
   if (originalSlackWebhook === undefined) delete process.env.SLACK_WEBHOOK_URL
   else process.env.SLACK_WEBHOOK_URL = originalSlackWebhook
+  if (originalRazorpayKeyId === undefined) delete process.env.RAZORPAY_KEY_ID
+  else process.env.RAZORPAY_KEY_ID = originalRazorpayKeyId
+  if (originalRazorpayKeySecret === undefined) delete process.env.RAZORPAY_KEY_SECRET
+  else process.env.RAZORPAY_KEY_SECRET = originalRazorpayKeySecret
 })
 
 describe('registry', () => {
-  it('registers all three step-3 connectors plus the step-7 Slack action', () => {
+  it('registers all three step-3 connectors plus the step-7/8 action tools', () => {
     const names = listTools().map((t) => t.name)
     expect(names).toContain('fx.convert')
     expect(names).toContain('calendar.isBusinessDay')
     expect(names).toContain('bank.lookupIFSC')
     expect(names).toContain('slack.notify')
+    expect(names).toContain('razorpay.settlements.list')
   })
 
   it('every tool exposes a JSON-schema-shaped input description', () => {
@@ -257,6 +265,106 @@ describe('slack.notify', () => {
     const tool = getTool<SlackNotifyInput, SlackNotifyOutput>('slack.notify')!
     const mode = await tool.status()
     expect(mode).toBe('live')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('razorpay.settlements.list', () => {
+  const SAMPLE = {
+    id: 'setl_ExxjcAzUYVzTz3',
+    entity: 'settlement' as const,
+    amount: 900000,
+    fees: 41300,
+    tax: 6300,
+    utr: '1234567890',
+    status: 'processed',
+    created_at: 1534594421,
+  }
+
+  it('reports unconfigured, and never even attempts a call, when no credentials are set', async () => {
+    delete process.env.RAZORPAY_KEY_ID
+    delete process.env.RAZORPAY_KEY_SECRET
+    const fetchSpy = vi.fn()
+    global.fetch = fetchSpy as unknown as typeof fetch
+
+    const tool = getTool<RazorpaySettlementsInput, RazorpaySettlementsOutput>('razorpay.settlements.list')!
+    const result = await tool.handler({})
+    expect(result.mode).toBe('unconfigured')
+    expect(result.data).toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('fetches for real when both credentials are set, and adapts the response to the canonical schema', async () => {
+    process.env.RAZORPAY_KEY_ID = 'rzp_test_abc'
+    process.env.RAZORPAY_KEY_SECRET = 'shh'
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ entity: 'collection', count: 1, items: [SAMPLE] }),
+    }))
+    global.fetch = fetchSpy as unknown as typeof fetch
+
+    const tool = getTool<RazorpaySettlementsInput, RazorpaySettlementsOutput>('razorpay.settlements.list')!
+    const result = await tool.handler({ count: 5 })
+
+    expect(result.mode).toBe('live')
+    expect(result.data!.records).toHaveLength(1)
+    const rec = result.data!.records[0]
+    expect(rec.id).toBe('setl_ExxjcAzUYVzTz3')
+    expect(rec.source).toBe('settlement')
+    expect(rec.amount).toBe(900000n) // Razorpay's amount is already minor units
+    expect(rec.fees).toBe(41300n)
+    expect(rec.tax).toBe(6300n)
+    expect(rec.reference).toBe('1234567890')
+    expect(rec.currency).toBe('INR')
+
+    // Sends Basic Auth built from the two env vars, not a bare key.
+    const calls = fetchSpy.mock.calls as unknown as [string, RequestInit][]
+    expect(calls[0][0]).toContain('count=5')
+    const authHeader = (calls[0][1].headers as Record<string, string>).Authorization
+    expect(authHeader).toBe(`Basic ${Buffer.from('rzp_test_abc:shh').toString('base64')}`)
+  })
+
+  it('reports the failure honestly, still labeled live (credentials were configured), when the call fails', async () => {
+    process.env.RAZORPAY_KEY_ID = 'rzp_test_abc'
+    process.env.RAZORPAY_KEY_SECRET = 'shh'
+    global.fetch = vi.fn(async () => {
+      throw new Error('CONNECT tunnel failed, response 403')
+    }) as unknown as typeof fetch
+
+    const tool = getTool<RazorpaySettlementsInput, RazorpaySettlementsOutput>('razorpay.settlements.list')!
+    const result = await tool.handler({})
+    expect(result.mode).toBe('live')
+    expect(result.data).toBeNull()
+    expect(result.reason).toContain('403')
+  })
+
+  it('has no fixture mode at all — every result is live or unconfigured, never a fabricated settlement', async () => {
+    process.env.RAZORPAY_KEY_ID = 'rzp_test_abc'
+    process.env.RAZORPAY_KEY_SECRET = 'shh'
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ entity: 'collection', count: 1, items: [SAMPLE] }),
+    })) as unknown as typeof fetch
+
+    const tool = getTool<RazorpaySettlementsInput, RazorpaySettlementsOutput>('razorpay.settlements.list')!
+    const configured = await tool.handler({})
+    delete process.env.RAZORPAY_KEY_ID
+    delete process.env.RAZORPAY_KEY_SECRET
+    const unconfigured = await tool.handler({})
+    expect([configured.mode, unconfigured.mode].sort()).toEqual(['live', 'unconfigured'])
+  })
+
+  it('status() reflects whether credentials are configured, without making a network call', async () => {
+    delete process.env.RAZORPAY_KEY_ID
+    delete process.env.RAZORPAY_KEY_SECRET
+    const fetchSpy = vi.fn()
+    global.fetch = fetchSpy as unknown as typeof fetch
+    const tool = getTool<RazorpaySettlementsInput, RazorpaySettlementsOutput>('razorpay.settlements.list')!
+
+    expect(await tool.status()).toBe('unconfigured')
+    process.env.RAZORPAY_KEY_ID = 'rzp_test_abc'
+    process.env.RAZORPAY_KEY_SECRET = 'shh'
+    expect(await tool.status()).toBe('live')
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

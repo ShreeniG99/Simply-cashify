@@ -81,7 +81,7 @@ dashboard never blocks on it.
 | `npm run dev` | Dev server with hot reload, on port 3000 |
 | `npm run build` | Production build |
 | `npm start` | Serve the production build (run `build` first) |
-| `npm test` | Run the test suite (180 tests) |
+| `npm test` | Run the test suite (185 tests) |
 | `npm run typecheck` | TypeScript check with no build |
 | `npm run bench` | Benchmark to the console — the numbers you cite |
 | `npm run fetch:berka` | Downloads the real Berka dataset (~67MB) |
@@ -213,7 +213,7 @@ lib/
   qa/         Settlement Q&A retrieval and template answers
   util/       RNG, holiday-aware date maths
 scripts/      bench CLI
-tests/        180 tests
+tests/        185 tests
 ```
 
 Two structural rules the code holds to:
@@ -229,16 +229,20 @@ assertion in `tests/truth-isolation.test.ts` rather than by convention.
 
 ## Status
 
-Steps 1–7 of 9 complete, plus the Berka scale benchmark pulled forward from
-step 8. Working end-to-end: generator, exact/fuzzy/optimal-assignment matching,
+Steps 1–7 of 9 complete, plus controller-voice exception copy, streaming
+tier progress, and the Razorpay test-mode connector pulled forward from
+step 8, plus the Berka scale benchmark also pulled forward from step 8.
+Working end-to-end: generator, exact/fuzzy/optimal-assignment matching,
 three-way tie-out, fee verification, multi-seed ablation, audit trail,
 dashboard, tool registry, LLM adjudication, Settlement Q&A, cash forecast,
-BYO-CSV upload, a Slack action, and an integrations panel — plus a second,
-real-data pipeline proving **109,521 records/sec** across the full
-1,062,791-row Berka dataset (`npm run bench:berka`; see `DATA.md`).
+BYO-CSV upload, a Slack action, a Razorpay settlements connector, and an
+integrations panel — plus a second, real-data pipeline proving **109,521
+records/sec** across the full 1,062,791-row Berka dataset
+(`npm run bench:berka`; see `DATA.md`).
 
-Remaining: steps 8 (BenchRec adapter, Razorpay test-mode API — Berka itself is
-already done) and 9 (MCP server) are both explicitly optional per the plan.
+Remaining: BenchRec (blocked on the dataset file — Kaggle is unreachable
+from every build session; the plan always scoped this as a manual upload)
+and step 9 (MCP server). Both are explicitly optional per the plan.
 
 Measured, not assumed: the multi-seed ablation showed the optimal-assignment
 tier does not move accuracy on this data (see `lib/eval/ablation.ts`) — kept
@@ -438,3 +442,30 @@ reconciliation logic depends on.
 typecheck clean; verified live via a real server run (`curl -N` with
 per-line timestamps, then a full browser pass) rather than assumed from the
 unit tests alone.
+
+### Step 8 — differentiators: Razorpay test-mode Settlements API
+
+`lib/tools/actions/razorpay.ts` + `lib/datasets/razorpay/adapter.ts` — a
+real, registered tool (`razorpay.settlements.list`) that pulls an
+authenticated account's actual test-mode settlement batches and adapts them
+to the canonical schema, same "one adapter file, no engine changes" claim
+`csvAdapter.ts` makes for a hand-built CSV. It deliberately has no `fixture`
+mode: unlike an FX rate or an IFSC code, a settlement batch is private,
+account-specific data with no immutable public fact to cache, so this tool
+only ever reports `live` (credentials configured) or `unconfigured` (they
+are not) — never a stand-in settlement dressed up as real data. `api.razorpay.com`
+is unreachable from this build environment, same denial as every other
+external host this project touches (see `DATA.md`), so `unconfigured` is
+what it genuinely reports here; a user with their own test-mode key pair
+would see it go live.
+
+The Berka scale benchmark (real 1.06M-row data, 109,521 rec/s) was already
+pulled forward from this step much earlier — see the Status section above
+and `DATA.md`.
+
+**BenchRec is not done.** It needs the actual ICAIF'23 dataset, hosted on
+Kaggle — `kaggle.com` is unreachable from every build session this project
+has run in (confirmed alongside the other blocked hosts above), and the
+plan always scoped this as "user uploads the file directly" for exactly that
+reason. Blocked on that file arriving, not on anything this session can do
+alone.

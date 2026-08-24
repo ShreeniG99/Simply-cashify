@@ -53,6 +53,23 @@ matcher sees — the only place in this project where truth isn't itself derived
 from a matchable signal. This is where the ablation table and per-class
 accuracy breakdown live.
 
+## Razorpay Settlements API (test mode — step 8)
+
+`lib/tools/actions/razorpay.ts` targets `api.razorpay.com`, which is also
+egress-blocked from every build session this project has run in (confirmed
+the same way as the other three hosts above — same 403 policy denial). The
+field shape in `lib/datasets/razorpay/adapter.ts` is written from Razorpay's
+published Settlements API documentation, never verified against a live
+response. Unlike the three step-3 connectors, this tool has no `fixture`
+mode at all: a settlement batch is private, account-specific data, not a
+small closed reference set like an IFSC code or a historical FX rate, so
+there is nothing honest to cache. It reports `live` (credentials configured)
+or `unconfigured` (they are not) — the actual state in every environment
+this project has run in, since no test-mode Razorpay account has been
+connected. A user with their own test-mode key pair (`RAZORPAY_KEY_ID`,
+`RAZORPAY_KEY_SECRET`) would see it genuinely go live; that has not been
+verified by this session and is worth confirming once deployed.
+
 ## BenchRec (real, labeled — planned, not yet integrated)
 
 ICAIF'23 Benchmark Competition dataset, hosted on Kaggle. Kaggle is
