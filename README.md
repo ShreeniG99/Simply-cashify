@@ -81,7 +81,7 @@ dashboard never blocks on it.
 | `npm run dev` | Dev server with hot reload, on port 3000 |
 | `npm run build` | Production build |
 | `npm start` | Serve the production build (run `build` first) |
-| `npm test` | Run the test suite (185 tests) |
+| `npm test` | Run the test suite (194 tests) |
 | `npm run typecheck` | TypeScript check with no build |
 | `npm run bench` | Benchmark to the console — the numbers you cite |
 | `npm run fetch:berka` | Downloads the real Berka dataset (~67MB) |
@@ -213,7 +213,8 @@ lib/
   qa/         Settlement Q&A retrieval and template answers
   util/       RNG, holiday-aware date maths
 scripts/      bench CLI
-tests/        185 tests
+tests/        194 tests
+mcp/          MCP server — same engine, exposed as tools for Claude Desktop
 ```
 
 Two structural rules the code holds to:
@@ -229,20 +230,24 @@ assertion in `tests/truth-isolation.test.ts` rather than by convention.
 
 ## Status
 
-Steps 1–7 of 9 complete, plus controller-voice exception copy, streaming
-tier progress, and the Razorpay test-mode connector pulled forward from
-step 8, plus the Berka scale benchmark also pulled forward from step 8.
-Working end-to-end: generator, exact/fuzzy/optimal-assignment matching,
-three-way tie-out, fee verification, multi-seed ablation, audit trail,
-dashboard, tool registry, LLM adjudication, Settlement Q&A, cash forecast,
-BYO-CSV upload, a Slack action, a Razorpay settlements connector, and an
-integrations panel — plus a second, real-data pipeline proving **109,521
-records/sec** across the full 1,062,791-row Berka dataset
-(`npm run bench:berka`; see `DATA.md`).
+All 9 steps of the plan have real, working code behind them, plus
+controller-voice exception copy and streaming tier progress (both raised
+earlier as ideas outside the plan's own numbering). Working end-to-end:
+generator, exact/fuzzy/optimal-assignment matching, three-way tie-out, fee
+verification, multi-seed ablation, audit trail, dashboard, tool registry,
+LLM adjudication, Settlement Q&A, cash forecast, BYO-CSV upload, a Slack
+action, a Razorpay settlements connector, an integrations panel, and an MCP
+server — plus a second, real-data pipeline proving **109,521 records/sec**
+across the full 1,062,791-row Berka dataset (`npm run bench:berka`; see
+`DATA.md`).
 
-Remaining: BenchRec (blocked on the dataset file — Kaggle is unreachable
-from every build session; the plan always scoped this as a manual upload)
-and step 9 (MCP server). Both are explicitly optional per the plan.
+**One genuine gap remains: BenchRec.** It needs the actual ICAIF'23 dataset
+file, and Kaggle has been unreachable from every build session this project
+has run in — the plan scoped this as a manual upload from day one for
+exactly that reason. Everything else is built and tested; see "Where the
+plan stands now" below for the two pieces (Razorpay, the MCP server) that
+are real and tested against a mock but not yet verified against a live
+network from this sandbox.
 
 Measured, not assumed: the multi-seed ablation showed the optimal-assignment
 tier does not move accuracy on this data (see `lib/eval/ablation.ts`) — kept
@@ -469,3 +474,78 @@ has run in (confirmed alongside the other blocked hosts above), and the
 plan always scoped this as "user uploads the file directly" for exactly that
 reason. Blocked on that file arriving, not on anything this session can do
 alone.
+
+### Step 9 — reach: Simply Cashify as an MCP server
+
+`mcp/server.ts` — the same reconciliation engine, exposed as an MCP server so
+Claude Desktop (or any MCP client) can run and inspect a reconciliation
+directly, without the dashboard in between. It calls the exact same
+functions the dashboard and the `bench` CLI call — `runReconciliation` and
+`runReconciliationFromBatch` from `lib/api/run.ts`, `buildContext`/
+`templateAnswer` from `lib/qa/answer.ts` for exception explanations — rather
+than reimplementing any of the logic a third time.
+
+Five tools, stdio transport (a local subprocess, the right choice for
+Claude Desktop — see the MCP TypeScript SDK's transport-selection guidance):
+
+| Tool | Does |
+|---|---|
+| `reconcile_batch` | Generate a synthetic batch and reconcile it — same generator + pipeline as the dashboard's primary button |
+| `upload_and_reconcile` | Reconcile a hand-supplied CSV, same `lib/datasets/csvAdapter.ts` the dashboard's drop zone uses |
+| `list_exceptions` | Paginated, filterable exception list with controller-voice summaries |
+| `explain_exception` | Grounded per-record explanation — literally `buildContext` + `templateAnswer`, the dashboard Q&A card's own logic |
+| `get_cash_position` | The 13-week forecast for a given run |
+
+`reconcile_batch`/`upload_and_reconcile` return a `runId`, not the full
+payload — a real run can carry hundreds of records, and dumping all of it
+into one tool response would blow past what's useful in an agent's context.
+The other three tools take that `runId` and answer a specific question
+against it instead. Runs are held in memory for the server process's
+lifetime only, matching the dashboard's own no-persistence-across-reload
+model — a run is a snapshot of one reconciliation, not a database record.
+
+**Verified as a real integration test, not just a design.**
+`tests/mcp.test.ts` spawns the actual server as a subprocess and drives it
+with the real `@modelcontextprotocol/sdk` client over the real stdio
+transport — the same path Claude Desktop would take — rather than calling
+the tool handler functions directly in-process. It reconciles a real batch,
+lists real exceptions, asks for an explanation of a record that doesn't
+exist and checks the response says so plainly rather than guessing, and
+uploads a hand-built CSV through `upload_and_reconcile` end to end.
+
+Run it yourself: `npm run mcp` starts the server on stdio. Point a Claude
+Desktop config at it with:
+
+```json
+{
+  "mcpServers": {
+    "simply-cashify": {
+      "command": "npx",
+      "args": ["tsx", "/absolute/path/to/Simply-cashify/mcp/server.ts"]
+    }
+  }
+}
+```
+
+194 tests pass (was 185). Build and typecheck clean.
+
+---
+
+## Where the plan stands now
+
+All nine steps have real, working code behind them. The two genuinely
+incomplete pieces are both external blockers, not scope cut for time:
+
+- **BenchRec** needs the actual ICAIF'23 dataset file, and Kaggle has been
+  unreachable from every build session this project has run in. The plan
+  scoped this as a manual upload from day one for exactly that reason — if
+  you have the file, dropping it in is the only remaining step (the adapter
+  pattern that would consume it, `lib/datasets/csvAdapter.ts`, already
+  exists and is proven against a different real-world format).
+- **Razorpay's Settlements API** and the new **MCP server** are both real,
+  tested code, but neither has been exercised against a live network from
+  this sandbox — `api.razorpay.com` is blocked the same way every other
+  external host this project touches is. Both would need to be tried from
+  an unrestricted machine (or with a real Razorpay test-mode account) before
+  calling them fully verified rather than "correct by construction and
+  tested against a mock."

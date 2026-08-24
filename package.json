@@ -13,9 +13,11 @@
     "test:watch": "vitest",
     "bench": "tsx scripts/bench.ts",
     "fetch:berka": "tsx scripts/fetch-berka.ts",
-    "bench:berka": "tsx scripts/bench-berka.ts"
+    "bench:berka": "tsx scripts/bench-berka.ts",
+    "mcp": "tsx mcp/server.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@radix-ui/react-dialog": "^1.1.2",
     "@radix-ui/react-tooltip": "^1.1.4",
     "clsx": "^2.1.1",
@@ -26,6 +28,7 @@
     "react-dom": "^19.0.0",
     "recharts": "^2.13.3",
     "tailwind-merge": "^2.5.4",
+    "zod": "^4.4.3",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
