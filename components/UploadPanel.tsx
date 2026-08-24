@@ -141,7 +141,7 @@ export function UploadPanel({ onResult }: { onResult?: () => void } = {}) {
                 <table className="w-full min-w-[640px] border-collapse">
                   <thead>
                     <tr className="border-b border-border text-left">
-                      {['record', 'reason', 'detail'].map((h) => (
+                      {['record', 'reason', 'what happened'].map((h) => (
                         <th key={h} className="pb-2 font-mono text-xs font-normal text-text-secondary">
                           {h}
                         </th>
@@ -155,7 +155,7 @@ export function UploadPanel({ onResult }: { onResult?: () => void } = {}) {
                         <td className="py-2 pr-4">
                           <ReasonBadge reason={e.reason} />
                         </td>
-                        <td className="py-2 font-mono text-xs text-text-secondary">{e.detail}</td>
+                        <td className="py-2 font-mono text-xs text-text-secondary">{e.controllerSummary}</td>
                       </tr>
                     ))}
                   </tbody>

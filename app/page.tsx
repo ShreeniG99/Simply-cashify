@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Play, AlertTriangle, Gauge, Coins, Layers, Info } from 'lucide-react'
 import type { RunPayload } from '@/lib/api/run'
 import type { DecisionRecord } from '@/lib/engine/types'
+import type { ProgressEvent } from '@/lib/engine/progress'
 import { ScoreRing } from '@/components/ScoreRing'
 import { DecisionDrawer } from '@/components/DecisionDrawer'
 import { CalibrationChart } from '@/components/CalibrationChart'
@@ -11,6 +12,7 @@ import { SettlementQA } from '@/components/SettlementQA'
 import { CashPanel } from '@/components/CashPanel'
 import { UploadPanel } from '@/components/UploadPanel'
 import { IntegrationsPanel } from '@/components/IntegrationsPanel'
+import { TierProgress } from '@/components/TierProgress'
 import { Card, CardTitle, ReasonBadge, ScrollX, Stat, TierBadge, pct } from '@/components/ui'
 
 export default function Page() {
@@ -22,10 +24,12 @@ export default function Page() {
   const [invoiceCount, setInvoiceCount] = useState('180')
   const [drawer, setDrawer] = useState<DecisionRecord | null>(null)
   const [hasUploaded, setHasUploaded] = useState(false)
+  const [progress, setProgress] = useState<ProgressEvent[]>([])
 
   async function go() {
     setBusy(true)
     setError(null)
+    setProgress([])
     try {
       const res = await fetch('/api/runs', {
         method: 'POST',
@@ -35,9 +39,40 @@ export default function Page() {
           invoiceCount: invoiceCount === '' ? undefined : Number(invoiceCount),
         }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Run failed')
-      setRun(data)
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error ?? 'Run failed')
+      }
+
+      // /api/runs streams newline-delimited JSON — zero or more progress
+      // lines as the pipeline actually runs, then one result (or error) line.
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let result: RunPayload | null = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let newlineIndex: number
+        while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, newlineIndex)
+          buffer = buffer.slice(newlineIndex + 1)
+          if (!line.trim()) continue
+          const msg = JSON.parse(line)
+          if (msg.type === 'progress') {
+            setProgress((prev) => [...prev, msg.event as ProgressEvent])
+          } else if (msg.type === 'result') {
+            result = msg.payload as RunPayload
+          } else if (msg.type === 'error') {
+            throw new Error(msg.error ?? 'Run failed')
+          }
+        }
+      }
+
+      if (!result) throw new Error('The run ended without a result.')
+      setRun(result)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Run failed')
     } finally {
@@ -85,6 +120,12 @@ export default function Page() {
           <div className="mt-4 flex flex-wrap gap-4">
             <Field label="seed" value={seed} onChange={setSeed} />
             <Field label="invoices" value={invoiceCount} onChange={setInvoiceCount} />
+          </div>
+        )}
+
+        {progress.length > 0 && (
+          <div className="mt-4 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg p-3">
+            <TierProgress events={progress} done={!busy} />
           </div>
         )}
 
@@ -325,14 +366,14 @@ export default function Page() {
           </Card>
 
           <Card>
-            <CardTitle hint="Every row the engine would not guess at, with a typed reason. A 100% match rate would mean it guessed.">
+            <CardTitle hint="Every row the engine would not guess at, with a typed reason. A 100% match rate would mean it guessed. Click a row for the exact score, threshold, or paisa delta behind it.">
               Exceptions ({run.exceptions.length})
             </CardTitle>
             <ScrollX>
               <table className="w-full min-w-[720px] border-collapse">
                 <thead>
                   <tr className="border-b border-border text-left">
-                    {['record', 'reason', 'detail', 'amount'].map((h) => (
+                    {['record', 'reason', 'what happened', 'amount'].map((h) => (
                       <th
                         key={h}
                         className="pb-2 font-mono text-xs font-normal text-text-secondary"
@@ -356,7 +397,7 @@ export default function Page() {
                           <ReasonBadge reason={e.reason} />
                         </td>
                         <td className="py-2 pr-4 font-mono text-xs text-text-secondary">
-                          {e.detail}
+                          {e.controllerSummary}
                         </td>
                         <td className="tabular py-2 font-mono text-xs text-text-primary">
                           {e.record?.amount ?? '—'}

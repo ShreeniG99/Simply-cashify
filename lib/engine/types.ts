@@ -37,8 +37,21 @@ export type ReconExceptionRecord = {
   paymentId?: string
   bankId?: string
   reason: ExceptionReason
-  /** Human-readable, shown directly in the exceptions table. */
+  /**
+   * Precise and technical — the exact candidate id, score, threshold, or paisa
+   * delta involved. This is the audit trail: what the decision drawer and
+   * Settlement Q&A show, because a controller re-checking a decision needs
+   * the specific numbers, not a paraphrase.
+   */
   detail: string
+  /**
+   * The same fact in a controller's own words — what the main exceptions
+   * table shows. Optional because a few call sites (older tests, hand-built
+   * fixtures) predate this field; `lib/copy/exceptions.ts` supplies a
+   * reason-only fallback sentence when it's missing, so nothing renders
+   * blank, but every real pipeline decision site fills it in.
+   */
+  controllerSummary?: string
   /** Populated when the agent tier looked at this and declined to match. */
   rationale?: string
 }

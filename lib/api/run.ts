@@ -14,6 +14,8 @@ import type { ReconcileResult } from '../engine/types'
 import { buildCashForecast } from '../forecast/cash'
 import { IN_FIXED_HOLIDAYS_2026 } from '../util/dates'
 import { notifySlack } from '../tools/actions/slack'
+import { controllerCopy } from '../copy/exceptions'
+import type { OnProgress } from '../engine/progress'
 
 export type AblationRow = {
   label: string
@@ -40,6 +42,7 @@ export type RunPayload = {
     id: string
     reason: string
     detail: string
+    controllerSummary: string
     rationale?: string
     side: 'ledger' | 'bank'
     record?: { id: string; date: string; amount: string; counterparty?: string; memo?: string }
@@ -82,17 +85,33 @@ export type RunPayload = {
 
 export async function runReconciliation(
   opts: { seed?: number; invoiceCount?: number } = {},
+  onProgress?: OnProgress,
 ): Promise<RunPayload> {
   const seed = opts.seed ?? Math.floor(Math.random() * 100000)
+  onProgress?.({ kind: 'phase', label: 'Generating the batch' })
   const { batch, truth } = generate({ seed, invoiceCount: opts.invoiceCount })
-  const result = await reconcile(batch)
+
+  onProgress?.({ kind: 'phase', label: 'Reconciling the primary run' })
+  const result = await reconcile(batch, { onProgress })
   const report = score(result, truth)
 
   // Sequential, not Promise.all: the LLM-adjudication rung makes real API
   // calls when a key is configured, and running six rungs concurrently would
   // multiply concurrent Groq requests against a free tier limited to ~30 RPM.
+  // Sequential execution is also what makes this loop the genuinely visible
+  // part of a run — six real passes over the same batch, not a simulated wait.
+  onProgress?.({ kind: 'phase', label: `Running the ablation sweep — ${ABLATION_RUNGS.length} configurations` })
   const ablation: AblationRow[] = []
-  for (const rung of ABLATION_RUNGS) {
+  for (let i = 0; i < ABLATION_RUNGS.length; i++) {
+    const rung = ABLATION_RUNGS[i]
+    onProgress?.({
+      kind: 'phase',
+      label: `Ablation ${i + 1}/${ABLATION_RUNGS.length} — ${rung.label}`,
+    })
+    // Tier-level events aren't forwarded here: the main run above already
+    // shows the full tier breakdown, and surfacing it six more times for each
+    // ablation rung would bury the one signal that actually matters at this
+    // point — which rung is running now.
     const r = await reconcile(batch, { config: rung.overrides })
     const s = score(r, truth)
     ablation.push({
@@ -105,6 +124,7 @@ export async function runReconciliation(
       wrongMatches: s.operating.wrongMatches,
     })
   }
+  onProgress?.({ kind: 'phase', label: 'Scoring and assembling the run' })
 
   const ledgerById = new Map(batch.ledger.map((l) => [l.id, l]))
   const bankById = new Map(batch.bank.map((b) => [b.id, b]))
@@ -132,6 +152,7 @@ export async function runReconciliation(
         id: e.ledgerId ?? e.bankId ?? `exc_${i}`,
         reason: e.reason,
         detail: e.detail,
+        controllerSummary: controllerCopy(e),
         rationale: e.rationale,
         side: e.ledgerId ? ('ledger' as const) : ('bank' as const),
         record: rec ? summarize(rec) : undefined,
@@ -250,6 +271,7 @@ export async function runReconciliationFromBatch(
         id: e.ledgerId ?? e.bankId ?? `exc_${i}`,
         reason: e.reason,
         detail: e.detail,
+        controllerSummary: controllerCopy(e),
         rationale: e.rationale,
         side: e.ledgerId ? ('ledger' as const) : ('bank' as const),
         record: rec ? summarize(rec) : undefined,

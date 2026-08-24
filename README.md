@@ -81,7 +81,7 @@ dashboard never blocks on it.
 | `npm run dev` | Dev server with hot reload, on port 3000 |
 | `npm run build` | Production build |
 | `npm start` | Serve the production build (run `build` first) |
-| `npm test` | Run the test suite (164 tests) |
+| `npm test` | Run the test suite (180 tests) |
 | `npm run typecheck` | TypeScript check with no build |
 | `npm run bench` | Benchmark to the console — the numbers you cite |
 | `npm run fetch:berka` | Downloads the real Berka dataset (~67MB) |
@@ -213,7 +213,7 @@ lib/
   qa/         Settlement Q&A retrieval and template answers
   util/       RNG, holiday-aware date maths
 scripts/      bench CLI
-tests/        164 tests
+tests/        180 tests
 ```
 
 Two structural rules the code holds to:
@@ -379,8 +379,62 @@ wrap instead of forcing every child onto one line; re-verified `scrollWidth
 
 164 tests pass. Build and typecheck clean.
 
-Two backlog items are intentionally not part of this step — they were never
-in the plan's step 7 scope, only raised earlier as ideas: rewriting exception
-copy in a controller's voice, and streaming tier-by-tier progress during a
-run (the latter would need the pipeline to emit progress over a stream, a
-real API-contract change, not a polish-sized one).
+### Exception copy in a controller's voice
+
+`ReconExceptionRecord.detail` (`lib/engine/types.ts`) stayed exactly as
+precise and technical as it always was — the exact candidate id, score,
+threshold, or paisa delta — because the decision drawer and Settlement Q&A
+exist so a controller can re-verify a specific claim down to the number. But
+that precision reads like a debug log when it's the first thing a controller
+sees while scanning fifty rows: *"Best candidate pay_2008 scored 0.7, below
+the 0.72 threshold"* answers "what number produced this," not "what do I do
+about it."
+
+So every real exception now also carries `controllerSummary`
+(`lib/copy/exceptions.ts`), computed at the exact same call sites in
+`lib/engine/pipeline.ts` from the same structured data `detail` was built
+from — never by reformatting or regex-parsing `detail` after the fact, which
+would be fragile and exactly backwards. *"The closest candidate, pay_2008,
+falls short of our auto-approval bar — worth a second look before
+confirming"* is the same fact, said the way a controller would say it. The
+main exceptions table now shows this; the decision drawer and Q&A still show
+the precise technical trace. Agent-tier exceptions reuse the LLM's own
+rationale for both, since it's already prompted to be "one or two sentences a
+controller could audit." A `GENERIC_CONTROLLER_COPY` fallback (reason-only,
+no dynamic detail) covers the few pre-existing test fixtures that predate
+this field, so nothing ever renders blank.
+
+### Streaming tier progress
+
+`npm run dev` and clicking **Run reconciliation** used to show a static
+"Reconciling…" spinner for the run's full ~1-2 seconds. `/api/runs` now
+streams newline-delimited JSON — zero or more `{type:'progress', event}`
+lines as `lib/engine/pipeline.ts` actually executes each tier
+(`lib/engine/progress.ts`), then one `{type:'result', payload}` line — so the
+dashboard shows what's actually running instead.
+
+Stated honestly rather than smoothed over: tiers 0-3 are synchronous and
+typically resolve in low single-digit milliseconds for a few hundred
+records, so on this machine the full main-run tier sequence streamed and
+rendered in well under 100ms end to end when checked directly (curl with
+per-line timestamps confirmed the transport itself is genuinely
+incremental, not buffered — Next.js's default response compression would
+silently defeat this by buffering the whole body, so nothing here pretends
+the events are slower than they are). That speed is itself the honest
+signal the ablation table has always made: deterministic matching is not
+where a run's time goes. The parts genuinely paced by real wall-clock time
+are the six-rung ablation sweep (a real sequential pass over the whole
+pipeline per rung, ~1-2 seconds total) and, when a live Groq key is
+configured, the per-record `agent-progress` events during tier 4 — both
+verified against real timestamps, not simulated with an artificial delay.
+
+`reconcile()` and `runAdjudication()` both take `onProgress` as a fully
+optional parameter; `tests/progress.test.ts` asserts the run produces
+byte-identical matches and exceptions whether or not a callback is supplied,
+so progress reporting is provably a side channel, not something the
+reconciliation logic depends on.
+
+171 → 180 tests pass across this and the exception-copy change. Build and
+typecheck clean; verified live via a real server run (`curl -N` with
+per-line timestamps, then a full browser pass) rather than assumed from the
+unit tests alone.

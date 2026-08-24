@@ -11,7 +11,7 @@
  */
 
 import type { CanonicalBatch, CanonicalRecord } from '../datasets/canonical'
-import { recordCount } from '../datasets/canonical'
+import { formatMinor, recordCount } from '../datasets/canonical'
 import { DEFAULT_CONFIG, type MatchConfig } from './config'
 import {
   assignmentMatch,
@@ -28,6 +28,7 @@ import { convertToInr } from '../tools/enrich/fx'
 import { runAdjudication, type ResidualCase } from './adjudicate'
 import { createGroqClientFromEnv } from '../llm/groq'
 import type { LLMClient } from '../llm/client'
+import type { OnProgress } from './progress'
 import type {
   DecisionRecord,
   ExceptionReason,
@@ -41,6 +42,8 @@ export type ReconcileOptions = {
   config?: Partial<MatchConfig>
   /** Injected for tests; production code omits this and reads GROQ_API_KEY. */
   llmClient?: LLMClient | null
+  /** Optional live progress events — see lib/engine/progress.ts. Never required for correctness. */
+  onProgress?: OnProgress
 }
 
 export async function reconcile(
@@ -48,9 +51,11 @@ export async function reconcile(
   opts: ReconcileOptions = {},
 ): Promise<ReconcileResult> {
   const cfg: MatchConfig = { ...DEFAULT_CONFIG, ...opts.config }
+  const onProgress = opts.onProgress
   const started = Date.now()
 
   // ---- Tier 0: normalize to the base currency at each record's own date ----
+  onProgress?.({ kind: 'tier', tier: 'normalize', label: 'Tier 0 — normalizing currencies to a common base' })
   const unresolvedFx = new Set<string>()
   const ledger = batch.ledger.map((rec) => normalize(rec, batch.baseCurrency, cfg, unresolvedFx))
   const payments = batch.settlements.map((rec) =>
@@ -58,28 +63,38 @@ export async function reconcile(
   )
 
   // ---- Stage A + C: tie bank credits to batches and verify the arithmetic ----
+  onProgress?.({ kind: 'tier', tier: 'tieout', label: 'Stage A — tying bank credits to settlement batches' })
   const tieouts = tieOut(batch.bank, payments, cfg)
 
   // ---- Stage B: tiers 1-2 over ledger x payments ----
   const candidates = buildCandidates(ledger, payments, cfg)
   const byLedger = groupCandidates(candidates)
 
+  onProgress?.({ kind: 'tier', tier: 'exact', label: 'Tier 1 — exact match by identifier and amount' })
   const tier1 = exactMatch(candidates)
 
   // Tier 3 REPLACES tier 2's greedy resolution rather than running after it.
   // Greedy consumes both sides of every pair it takes, so anything it got wrong
   // would already be locked in and the solver could not undo it — the ablation
   // row would then measure nothing at all.
+  const contestedTier: MatchTier = cfg.enableAssignment ? 'assignment' : 'fuzzy'
+  onProgress?.({
+    kind: 'tier',
+    tier: contestedTier,
+    label: cfg.enableAssignment
+      ? 'Tier 3 — optimal assignment over the contested residual'
+      : 'Tier 2 — fuzzy match over the contested residual',
+  })
   const contested = cfg.enableAssignment
     ? assignmentMatch(candidates, tier1, cfg)
     : fuzzyMatch(candidates, tier1, cfg)
-  const contestedTier: MatchTier = cfg.enableAssignment ? 'assignment' : 'fuzzy'
 
   const merged: TierResult = {
     matches: [...tier1.matches, ...contested.matches],
     consumedLedger: contested.consumedLedger,
     consumedPayments: contested.consumedPayments,
   }
+  onProgress?.({ kind: 'tier', tier: 'splits', label: 'Checking split settlements — one invoice, several payments' })
   const splits = splitMatch(ledger, payments, merged, cfg)
 
   const matches: ProposedMatch[] = [
@@ -131,7 +146,8 @@ export async function reconcile(
         candidates: (byLedger.get(l.id) ?? []).slice().sort((a, b) => b.confidence - a.confidence),
       }))
 
-    const summary = await runAdjudication(residuals, payments, llmClient, cfg)
+    onProgress?.({ kind: 'tier', tier: 'agent', label: 'Tier 4 — LLM adjudication over the genuine residual' })
+    const summary = await runAdjudication(residuals, payments, llmClient, cfg, onProgress)
     agentTokens = summary.totalTokens
     agentCostUsd = summary.estimatedCostUsd
     agentLatencies = summary.latencies
@@ -155,7 +171,17 @@ export async function reconcile(
         })
       } else {
         agentExceptionIds.add(r.ledgerId)
-        exceptions.push({ ledgerId: r.ledgerId, reason: r.reason, detail: r.rationale, rationale: r.rationale })
+        // The agent's rationale is already prompted to be "one or two sentences a
+        // controller could audit" (see adjudicate.ts's FLAG_EXCEPTION schema), so
+        // unlike the deterministic tiers it doubles as its own controller summary
+        // rather than needing a separate technical-vs-plain-language split.
+        exceptions.push({
+          ledgerId: r.ledgerId,
+          reason: r.reason,
+          detail: r.rationale,
+          controllerSummary: r.rationale,
+          rationale: r.rationale,
+        })
         decisions.push({
           subjectId: r.ledgerId,
           tier: 'exception',
@@ -172,12 +198,13 @@ export async function reconcile(
   }
 
   // ---- Exceptions: everything tiers 1-4 could not resolve ----
+  onProgress?.({ kind: 'tier', tier: 'exceptions', label: 'Classifying the remaining residual with a typed reason' })
   for (const l of ledger) {
     if (matchedLedger.has(l.id) || agentExceptionIds.has(l.id)) continue
     const cands = (byLedger.get(l.id) ?? []).sort((a, b) => b.confidence - a.confidence)
-    const { reason, detail } = classifyException(l, cands, ledger, matchedLedger, unresolvedFx, cfg)
+    const { reason, detail, controllerSummary } = classifyException(l, cands, ledger, matchedLedger, unresolvedFx, cfg)
 
-    exceptions.push({ ledgerId: l.id, reason, detail })
+    exceptions.push({ ledgerId: l.id, reason, detail, controllerSummary })
     decisions.push({
       subjectId: l.id,
       tier: 'exception',
@@ -201,12 +228,16 @@ export async function reconcile(
         bankId: t.bankId,
         reason: 'orphan',
         detail: 'Bank credit has no corresponding settlement batch',
+        controllerSummary:
+          "This bank credit doesn't tie back to any settlement batch we have on file — check for a UTR mismatch, or a settlement report we haven't received yet.",
       })
     } else if (!t.feeMathOk) {
+      const overShort = t.feeMathDelta > 0n ? 'short by' : 'over by'
       exceptions.push({
         bankId: t.bankId,
         reason: 'fee_math_break',
         detail: `gross − fees − tax ± refunds differs from the credit by ${t.feeMathDelta} paisa`,
+        controllerSummary: `The settlement math doesn't add up — what landed in the bank is ${overShort} ${formatMinor(t.feeMathDelta < 0n ? -t.feeMathDelta : t.feeMathDelta)} versus gross minus fees and tax. Worth flagging to the payment processor.`,
       })
     }
   }
@@ -317,13 +348,16 @@ function classifyException(
   matchedLedger: Set<string>,
   unresolvedFx: Set<string>,
   cfg: MatchConfig,
-): { reason: ExceptionReason; detail: string } {
+): { reason: ExceptionReason; detail: string; controllerSummary: string } {
   if (unresolvedFx.has(l.id)) {
     return {
       reason: 'fx_unresolved',
       detail: cfg.enableFx
         ? `No rate available for ${l.currency} on ${l.date}`
         : `Invoice raised in ${l.currency}; FX normalization is disabled`,
+      controllerSummary: cfg.enableFx
+        ? `We don't have an exchange rate for ${l.currency} on ${l.date}, so this couldn't be compared to the settlement.`
+        : `This invoice was raised in ${l.currency}, but currency conversion is off for this run, so it couldn't be compared.`,
     }
   }
 
@@ -331,6 +365,7 @@ function classifyException(
     return {
       reason: 'invalid_bank_details',
       detail: `IFSC ${l.ifsc} is not a valid branch code`,
+      controllerSummary: `The IFSC on file, ${l.ifsc}, isn't a valid branch code — worth confirming the counterparty's bank details before this goes any further.`,
     }
   }
 
@@ -347,6 +382,7 @@ function classifyException(
     return {
       reason: 'duplicate_suspected',
       detail: `Appears to duplicate ${twin.id}, which is already settled`,
+      controllerSummary: `This looks like a repeat of ${twin.id}, which is already settled — probably a duplicate entry rather than a separate payment.`,
     }
   }
 
@@ -356,6 +392,7 @@ function classifyException(
       return {
         reason: 'ambiguous_multiple_candidates',
         detail: `${cands.length} candidates within 5% confidence; top two are ${first.payment.id} and ${second.payment.id}`,
+        controllerSummary: `${cands.length} settlement payments are equally plausible here — ${first.payment.id} and ${second.payment.id} are the closest two. Needs a human to pick.`,
       }
     }
   }
@@ -364,10 +401,15 @@ function classifyException(
     return {
       reason: 'low_confidence',
       detail: `Best candidate ${cands[0].payment.id} scored ${round(cands[0].confidence)}, below the ${cfg.fuzzyAcceptThreshold} threshold`,
+      controllerSummary: `The closest candidate, ${cands[0].payment.id}, falls short of our auto-approval bar — worth a second look before confirming.`,
     }
   }
 
-  return { reason: 'orphan', detail: 'No settlement payment corresponds to this invoice' }
+  return {
+    reason: 'orphan',
+    detail: 'No settlement payment corresponds to this invoice',
+    controllerSummary: 'Nothing on the settlement side lines up with this invoice at all — likely still outstanding, or paid outside this batch.',
+  }
 }
 
 function round(n: number): number {

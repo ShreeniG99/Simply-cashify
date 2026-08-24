@@ -26,6 +26,7 @@ import { GROQ_PRICING } from '../llm/groq'
 import { getTool } from '../tools/registry'
 import '../tools/index' // ensures fx.convert / calendar.isBusinessDay / bank.lookupIFSC are registered
 import { LEDGER_SEARCH_TOOL_DEF, searchLedger, type LedgerSearchInput } from '../tools/enrich/ledgerSearch'
+import type { OnProgress } from './progress'
 
 export type ResidualCase = {
   ledger: CanonicalRecord
@@ -338,6 +339,7 @@ export async function runAdjudication(
   payments: CanonicalRecord[],
   client: LLMClient,
   cfg: Pick<MatchConfig, 'maxAgentRecords'>,
+  onProgress?: OnProgress,
 ): Promise<AdjudicationSummary> {
   const ordered = [...residuals].sort(
     (a, b) => (b.candidates[0]?.confidence ?? 0) - (a.candidates[0]?.confidence ?? 0),
@@ -349,9 +351,12 @@ export async function runAdjudication(
   const results: AgentResult[] = []
   // Sequential, not Promise.all: free-tier rate limits (~30 RPM) make
   // concurrent calls counterproductive, and it keeps the touch order the
-  // audit trail reports deterministic.
-  for (const r of toProcess) {
-    results.push(await adjudicateOne(r, payments, client))
+  // audit trail reports deterministic. That sequencing is also what makes
+  // agent-progress events meaningful — each one reflects a real completed
+  // network round-trip, not a simulated tick.
+  for (let i = 0; i < toProcess.length; i++) {
+    results.push(await adjudicateOne(toProcess[i], payments, client))
+    onProgress?.({ kind: 'agent-progress', index: i + 1, total: toProcess.length })
   }
   for (const r of notReached) {
     results.push({ outcome: 'not_reached', ledgerId: r.ledger.id })
