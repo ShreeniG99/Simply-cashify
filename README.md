@@ -262,4 +262,28 @@ mid-call network failure, the `maxAgentRecords` cost cap — is exercised in
 `tests/adjudicate.test.ts` against a scripted mock `LLMClient`, independent of
 whether a real key is ever configured.
 
-Next: the ablation/calibration proof step, then exception copy and streaming UI.
+### Step 5 — proof, on the dashboard
+
+The confidence/coverage curve and unit-economics panel (`components/CalibrationChart.tsx`)
+surface data the backend already computed in steps 1–4 — no new backend logic,
+purely making the existing numbers visible. The curve is why the headline
+auto-clear figure is what it is: precision and auto-clear trade off as the
+threshold moves, and the marked operating point is the lowest threshold whose
+precision still clears the 99.5% target.
+
+Caught one real rendering bug while screenshotting it: the lines appeared to
+stop mid-chart with the operating-point markers floating disconnected — not a
+data problem (the underlying `curve` array was verified complete and correct
+first) but recharts' default line-draw animation caught mid-transition.
+Disabled animation on the chart; a static benchmark dashboard has no reason to
+animate a line-draw, and it removes the same screenshot-timing risk for anyone
+presenting this live.
+
+The unit-economics panel has two states, and only one has been visually
+verified: the honest "no agent activity" fallback (no `GROQ_API_KEY` here).
+The populated-stats branch is unit-tested (`tests/adjudicate.test.ts`) and
+reuses the already-verified `Stat` component, but has not been screenshotted
+end to end — noted as an open gap, not silently assumed correct.
+
+Next: exception copy in a controller's voice, then streaming UI, then the
+Settlement Q&A head.

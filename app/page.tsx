@@ -6,6 +6,7 @@ import type { RunPayload } from '@/lib/api/run'
 import type { DecisionRecord } from '@/lib/engine/types'
 import { ScoreRing } from '@/components/ScoreRing'
 import { DecisionDrawer } from '@/components/DecisionDrawer'
+import { CalibrationChart } from '@/components/CalibrationChart'
 import { Card, CardTitle, ReasonBadge, ScrollX, Stat, TierBadge, pct } from '@/components/ui'
 
 export default function Page() {
@@ -190,6 +191,47 @@ export default function Page() {
                 </tbody>
               </table>
             </ScrollX>
+          </Card>
+
+          {/* The proof behind the headline number: why THIS threshold, not a
+              higher or lower one. */}
+          <Card>
+            <CardTitle hint="Precision and auto-clear trade off as the threshold moves. The marked point is the lowest threshold whose precision still clears the target — where the headline auto-clear number above comes from.">
+              Confidence / coverage curve
+            </CardTitle>
+            <CalibrationChart
+              curve={run.report.curve}
+              precisionTarget={run.report.precisionTarget}
+              operatingThreshold={op.threshold}
+            />
+          </Card>
+
+          <Card>
+            <CardTitle hint="What the agent tier actually costs, when it runs. Not fabricated when it doesn't.">
+              Unit economics
+            </CardTitle>
+            {run.stats.llmTouchRate > 0 ? (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Stat label="LLM touch rate" value={pct(run.stats.llmTouchRate)} />
+                <Stat
+                  label="cost per 1,000 records"
+                  value={`$${((run.stats.estimatedCostUsd / run.stats.recordCount) * 1000).toFixed(3)}`}
+                  hint={`$${run.stats.estimatedCostUsd.toFixed(4)} this run · ${run.stats.tokensUsed.toLocaleString()} tokens`}
+                />
+                <Stat label="p50 latency" value={`${run.stats.latencyP50Ms}`} suffix="ms" />
+                <Stat label="p95 latency" value={`${run.stats.latencyP95Ms}`} suffix="ms" />
+              </div>
+            ) : (
+              <p className="font-mono text-xs text-text-secondary">
+                No agent activity this run —{' '}
+                {run.agentTier === 'skipped_no_key'
+                  ? 'no LLM key configured'
+                  : run.agentTier === 'skipped_disabled'
+                    ? 'agent tier disabled'
+                    : 'tiers 1–3 resolved everything the agent would have touched'}
+                . Cost and latency figures would be zero either way; this is why, not a hidden failure.
+              </p>
+            )}
           </Card>
 
           <div className="grid gap-4 lg:grid-cols-3">
