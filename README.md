@@ -285,5 +285,37 @@ The populated-stats branch is unit-tested (`tests/adjudicate.test.ts`) and
 reuses the already-verified `Stat` component, but has not been screenshotted
 end to end — noted as an open gap, not silently assumed correct.
 
+### Step 6 — legibility: Settlement Q&A + tool-call narration
+
+`lib/qa/answer.ts` — RAG over the audit trail, closed-world by construction:
+retrieval (`findRecordId`) only ever resolves to a record id that genuinely
+exists in the loaded run, by substring match against ids actually present —
+never a regex guess at what an id "should" look like. Answering degrades the
+same way tier 4 does: a deterministic `templateAnswer` computed with no model
+call is the floor; when a Groq key is configured, an LLM polishes the prose
+but is told explicitly to use only the given per-record context, and any
+live-call failure falls back to the template rather than erroring. `/api/qa`
+and the `Settlement Q&A` dashboard card wire this in; example-question chips
+prompt a first question before anyone has to guess the right phrasing.
+
+Caught and fixed a real overclaim while screenshotting it, not after: the
+answer for a tiers-1-3 record read "it checked whether the settlement date
+fell on a bank holiday" — but tiers 1-3 compute synchronously in-process, so
+there was no discrete per-record check to describe. That phrasing was
+accidentally borrowed from `pipeline.ts`'s `toolsFor()`, which tags a decision
+with `calendar.isBusinessDay` whenever holiday-awareness is enabled for the
+*whole batch*, not because that specific comparison needed it — a capability
+flag, not a call log. Tier 4's `toolsCalled`, by contrast, is genuinely a
+per-record log from `adjudicate.ts`. `narrateTools()` now takes the deciding
+tier and phrases accordingly: past-tense, specific ("it checked...") only for
+`tier === 'agent'`, where it's true; present-tense, capability-level
+("this tier runs with holiday-aware date scoring enabled for the batch — not
+a per-record lookup...") for tiers 1-3, where that's what's actually going on.
+Same helper feeds both the Q&A answer and a new line in the decision drawer,
+so the two surfaces can't drift apart on this. Visually verified in both
+places via a real server run + Playwright screenshot after the fix.
+
+140 tests pass. Build and typecheck clean.
+
 Next: exception copy in a controller's voice, then streaming UI, then the
-Settlement Q&A head.
+remaining "polish" items — cash panel, BYO-CSV, Slack, integrations panel.

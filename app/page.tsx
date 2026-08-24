@@ -7,6 +7,7 @@ import type { DecisionRecord } from '@/lib/engine/types'
 import { ScoreRing } from '@/components/ScoreRing'
 import { DecisionDrawer } from '@/components/DecisionDrawer'
 import { CalibrationChart } from '@/components/CalibrationChart'
+import { SettlementQA } from '@/components/SettlementQA'
 import { Card, CardTitle, ReasonBadge, ScrollX, Stat, TierBadge, pct } from '@/components/ui'
 
 export default function Page() {
@@ -358,6 +359,16 @@ export default function Page() {
                 </tbody>
               </table>
             </ScrollX>
+          </Card>
+
+          {/* RAG over the audit trail above — grounded by construction, since
+              retrieval only ever resolves to an id that actually exists in
+              this run. See lib/qa/answer.ts. */}
+          <Card>
+            <CardTitle hint="Ask about any invoice or payment in this run. Answers are grounded in the same decision records the drawer shows — an LLM only polishes the prose when a key is configured, never the facts.">
+              Settlement Q&A
+            </CardTitle>
+            <SettlementQA run={run} />
           </Card>
 
           <details className="rounded-xl border border-border bg-surface p-5">

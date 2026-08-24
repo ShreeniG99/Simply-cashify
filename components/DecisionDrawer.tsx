@@ -3,6 +3,7 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import type { DecisionRecord } from '@/lib/engine/types'
+import { narrateTools } from '@/lib/qa/answer'
 import { TierBadge } from './ui'
 
 /**
@@ -71,13 +72,20 @@ export function DecisionDrawer({
                 {decision.toolsCalled.length === 0 ? (
                   <Empty>None — resolved deterministically.</Empty>
                 ) : (
-                  <ul className="space-y-1">
-                    {decision.toolsCalled.map((t, i) => (
-                      <li key={i} className="font-mono text-xs text-accent">
-                        {t}()
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <ul className="space-y-1">
+                      {decision.toolsCalled.map((t, i) => (
+                        <li key={i} className="font-mono text-xs text-accent">
+                          {t}()
+                        </li>
+                      ))}
+                    </ul>
+                    {/* Plain-language narration of the same tool calls above —
+                        data vs. what the investigation actually did. */}
+                    <p className="mt-2 font-mono text-xs leading-relaxed text-text-secondary">
+                      {narrateTools(decision.toolsCalled, decision.tier)}
+                    </p>
+                  </>
                 )}
               </Section>
 
