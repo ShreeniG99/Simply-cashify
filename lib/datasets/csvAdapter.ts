@@ -23,6 +23,7 @@
  */
 
 import { toMinor, type CanonicalBatch, type CanonicalRecord, type SourceKind } from './canonical'
+import { splitCsvLine } from '../util/csv'
 
 const REQUIRED_COLUMNS = ['source', 'id', 'date', 'amount', 'currency'] as const
 const OPTIONAL_COLUMNS = [
@@ -37,35 +38,6 @@ const OPTIONAL_COLUMNS = [
 const SOURCES: SourceKind[] = ['bank', 'settlement', 'ledger']
 
 export type CsvParseResult = { ok: true; batch: CanonicalBatch } | { ok: false; error: string }
-
-/** Splits one CSV line respecting double-quoted fields that may contain commas. */
-function splitCsvLine(line: string): string[] {
-  const fields: string[] = []
-  let cur = ''
-  let inQuotes = false
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i]
-    if (inQuotes) {
-      if (ch === '"' && line[i + 1] === '"') {
-        cur += '"'
-        i++
-      } else if (ch === '"') {
-        inQuotes = false
-      } else {
-        cur += ch
-      }
-    } else if (ch === '"') {
-      inQuotes = true
-    } else if (ch === ',') {
-      fields.push(cur)
-      cur = ''
-    } else {
-      cur += ch
-    }
-  }
-  fields.push(cur)
-  return fields.map((f) => f.trim())
-}
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 

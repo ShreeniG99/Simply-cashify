@@ -14,10 +14,12 @@ import path from 'node:path'
 const ROOT = path.resolve(__dirname, '..')
 const TRUTH_MODULE = path.join(ROOT, 'lib/datasets/truth.ts')
 const BERKA_TRUTH_MODULE = path.join(ROOT, 'lib/datasets/berka/truth.ts')
+const BENCHREC_TRUTH_MODULE = path.join(ROOT, 'lib/datasets/benchrec/truth.ts')
 
 /** Entry points that must never reach ground truth. */
 const BLIND_ENTRYPOINTS = ['lib/engine/pipeline.ts', 'lib/engine/adjudicate.ts']
 const BERKA_BLIND_ENTRYPOINTS = ['lib/engine/berkaMatch.ts', 'lib/datasets/berka/adapter.ts']
+const BENCHREC_BLIND_ENTRYPOINTS = ['lib/engine/benchrecMatch.ts', 'lib/datasets/benchrec/adapter.ts']
 
 const IMPORT_RE = /(?:^|\n)\s*(?:import|export)[\s\S]*?from\s+['"]([^'"]+)['"]/g
 
@@ -88,5 +90,23 @@ describe('Berka ground-truth isolation', () => {
     void reachable
     const benchReachable = transitiveImports(path.join(ROOT, 'scripts/bench-berka.ts'))
     expect(benchReachable.has(BERKA_TRUTH_MODULE)).toBe(true)
+  })
+})
+
+describe('BenchRec ground-truth isolation', () => {
+  it('has a truth module to isolate', () => {
+    expect(existsSync(BENCHREC_TRUTH_MODULE)).toBe(true)
+  })
+
+  for (const entry of BENCHREC_BLIND_ENTRYPOINTS) {
+    it(`${entry} cannot reach lib/datasets/benchrec/truth`, () => {
+      const reachable = transitiveImports(path.join(ROOT, entry))
+      expect(reachable.has(BENCHREC_TRUTH_MODULE)).toBe(false)
+    })
+  }
+
+  it('the import walker reaches BenchRec truth from where it legitimately should', () => {
+    const benchReachable = transitiveImports(path.join(ROOT, 'scripts/bench-benchrec.ts'))
+    expect(benchReachable.has(BENCHREC_TRUTH_MODULE)).toBe(true)
   })
 })
