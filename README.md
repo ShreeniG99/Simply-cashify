@@ -81,11 +81,13 @@ dashboard never blocks on it.
 | `npm run dev` | Dev server with hot reload, on port 3000 |
 | `npm run build` | Production build |
 | `npm start` | Serve the production build (run `build` first) |
-| `npm test` | Run the test suite (194 tests) |
+| `npm test` | Run the test suite (217 tests) |
 | `npm run typecheck` | TypeScript check with no build |
 | `npm run bench` | Benchmark to the console — the numbers you cite |
 | `npm run fetch:berka` | Downloads the real Berka dataset (~67MB) |
 | `npm run bench:berka` | Throughput/correctness at scale on 1.06M real rows |
+| `npm run bench:benchrec` | Real-data proof on BenchRec — no fetch script; place the 3 CSVs in `data/raw/benchrec/` yourself (see `DATA.md`) |
+| `npm run mcp` | Starts the MCP server on stdio, for Claude Desktop or `tests/mcp.test.ts` |
 
 `npm run bench` accepts environment overrides:
 
@@ -213,7 +215,7 @@ lib/
   qa/         Settlement Q&A retrieval and template answers
   util/       RNG, holiday-aware date maths
 scripts/      bench CLI
-tests/        194 tests
+tests/        217 tests
 mcp/          MCP server — same engine, exposed as tools for Claude Desktop
 ```
 
@@ -230,24 +232,24 @@ assertion in `tests/truth-isolation.test.ts` rather than by convention.
 
 ## Status
 
-All 9 steps of the plan have real, working code behind them, plus
-controller-voice exception copy and streaming tier progress (both raised
-earlier as ideas outside the plan's own numbering). Working end-to-end:
-generator, exact/fuzzy/optimal-assignment matching, three-way tie-out, fee
-verification, multi-seed ablation, audit trail, dashboard, tool registry,
-LLM adjudication, Settlement Q&A, cash forecast, BYO-CSV upload, a Slack
-action, a Razorpay settlements connector, an integrations panel, and an MCP
-server — plus a second, real-data pipeline proving **109,521 records/sec**
-across the full 1,062,791-row Berka dataset (`npm run bench:berka`; see
-`DATA.md`).
+Every step of the plan — all 9 — has real, working code behind it now,
+plus controller-voice exception copy and structured Settlement Q&A answers
+(both raised as ideas outside the plan's own numbering). Working
+end-to-end: generator, exact/fuzzy/optimal-assignment matching, three-way
+tie-out, fee verification, multi-seed ablation, audit trail, dashboard,
+tool registry, LLM adjudication, Settlement Q&A, cash forecast, BYO-CSV
+upload, a Slack action, a Razorpay settlements connector, an integrations
+panel, and an MCP server — plus **two** real-data pipelines: **109,521
+records/sec** across the full 1,062,791-row Berka dataset, and a third,
+structurally different real dataset (BenchRec, ICAIF'23) proving the
+fuzzy/assignment tiers on real free text with no identifier at all —
+**99.1% precision** at a measured, explained recall (see `DATA.md` for both
+and the honest reasoning behind BenchRec's recall number).
 
-**One genuine gap remains: BenchRec.** It needs the actual ICAIF'23 dataset
-file, and Kaggle has been unreachable from every build session this project
-has run in — the plan scoped this as a manual upload from day one for
-exactly that reason. Everything else is built and tested; see "Where the
-plan stands now" below for the two pieces (Razorpay, the MCP server) that
-are real and tested against a mock but not yet verified against a live
-network from this sandbox.
+See "Where the plan stands now" below for the two pieces (Razorpay, the MCP
+server) that are real and tested against a mock but not yet verified
+against a live network from this sandbox — the one honest gap remaining
+across the whole project.
 
 Measured, not assumed: the multi-seed ablation showed the optimal-assignment
 tier does not move accuracy on this data (see `lib/eval/ablation.ts`) — kept
@@ -468,12 +470,38 @@ The Berka scale benchmark (real 1.06M-row data, 109,521 rec/s) was already
 pulled forward from this step much earlier — see the Status section above
 and `DATA.md`.
 
-**BenchRec is not done.** It needs the actual ICAIF'23 dataset, hosted on
-Kaggle — `kaggle.com` is unreachable from every build session this project
-has run in (confirmed alongside the other blocked hosts above), and the
-plan always scoped this as "user uploads the file directly" for exactly that
-reason. Blocked on that file arriving, not on anything this session can do
-alone.
+**BenchRec** (`lib/datasets/benchrec/`, `lib/engine/benchrecMatch.ts`,
+`lib/eval/benchrecScore.ts`) — a third, structurally different real dataset:
+pure two-way ledger-vs-statement matching, no settlement-batch layer, no
+identifier text, real dollar amounts from $40 to several billion. Kaggle is
+unreachable from every build session this project has run in and no GitHub
+mirror exists (unlike Berka), so the project owner supplied the three CSVs
+directly — `npm run bench:benchrec` reads them from `data/raw/benchrec/`.
+
+Real scale forced two techniques Berka didn't need, since this dataset holds
+everything in one account (no natural partition key): amount-window
+blocking instead of a full cross product, and connected-component
+partitioning before the O(n²m) Hungarian solver runs — one real component
+held 1,034,165 nodes (hundreds of transactions share an identical round
+amount), and 156 oversized components correctly fell back to greedy rather
+than attempting that solve directly.
+
+**Measured** (commit `4ab0511`, eval split, `npm run bench:benchrec`):
+**99.1% precision, 12.4% recall**, 34 wrong auto-approvals out of 3,769
+claims, 412 seconds end-to-end on 69,171 real rows. The recall number is a
+genuine, explained finding, not a defect the numbers are hiding: the run's
+own confidence histogram shows 340,898 candidates sitting in the 0.6–0.72
+band against only 3,871 above it — the same fixed 0.72 threshold tuned for
+the synthetic generator's clearer signal, applied unchanged to two
+independent systems describing the same transaction in genuinely different
+free text. Declining a near-miss rather than lowering the bar to claim it is
+the same precision-gated philosophy the app's own headline metric already
+uses — a wrong auto-approval is the expensive, invisible failure this whole
+project exists to avoid. A dataset-specific threshold calibration (the same
+sweep `lib/eval/score.ts` already runs for the generator) would very likely
+raise recall substantially; not attempted here for time, and named as the
+obvious next step rather than left silently undone. See `DATA.md` for the
+full breakdown.
 
 ### Step 9 — reach: Simply Cashify as an MCP server
 
@@ -529,23 +557,60 @@ Desktop config at it with:
 
 194 tests pass (was 185). Build and typecheck clean.
 
+### Post-launch: a real user bug report, fixed two ways
+
+A user testing Settlement Q&A asked a direct question that caught a real
+defect: for a duplicate-suspected exception, the decision drawer said
+*"pay_2090 (scored 1 — confidence 1 below accept threshold 0.72)"* — a
+self-contradiction, since 1 is not below 0.72.
+
+**The data bug.** `lib/engine/pipeline.ts`'s exceptions loop applied one
+hardcoded rejection sentence — "confidence X below accept threshold Y" — to
+every rejected alternative, regardless of whether that was true. A duplicate
+ledger row's best candidate can score a perfect match against the payment
+its twin already claimed; the real reason it wasn't used is "already matched
+elsewhere," not "too low-scoring." `rejectedBecauseFor()` now checks what's
+actually true of each candidate before writing the sentence — below
+threshold (the original claim, still correct when it applies), already
+claimed by a specific other invoice, or — rarer — the row itself was
+excluded for an unrelated reason, named instead of blaming the score.
+`tests/alternatives.test.ts` adds a general invariant (no alternative, on
+any seed, ever claims "below threshold" for a score that isn't) plus a
+direct reproduction of the reported case searched across 40 seeds, and the
+fix was verified live against the exact reported scenario through the real
+`/api/qa` endpoint before and after.
+
+**The format request.** The same user asked for the answer to be
+restructured into points, directly addressing the exact question, explained
+plainly. `lib/qa/answer.ts`'s `templateAnswer` now returns `{headline,
+points}` instead of one dense paragraph — a direct one-sentence answer
+(reusing the exact `controllerSummary` the exceptions table shows, not a
+second paraphrase that could drift from it) plus each supporting fact as its
+own scannable line, rather than a run-on sentence burying the actual answer
+in the middle. The LLM-polish path was updated to match: the system prompt
+now asks for the same `{headline, points}` JSON shape, parsed and validated,
+falling back to the template on any malformed response — same resilience
+pattern as tier 4's malformed-tool-call handling. Reproduced the exact
+reported question ("why is pay_2090 rejected even when confidence was 1")
+live in the browser after the fix: the answer now states the real cause —
+"already matched to INV-2090" — as its own bullet point.
+
+217 tests pass. Build and typecheck clean.
+
 ---
 
 ## Where the plan stands now
 
-All nine steps have real, working code behind them. The two genuinely
-incomplete pieces are both external blockers, not scope cut for time:
+All nine steps have real, working code behind them, tested, and run against
+real data where real data exists. One honest gap remains, and it's an
+external blocker, not scope cut for time:
 
-- **BenchRec** needs the actual ICAIF'23 dataset file, and Kaggle has been
-  unreachable from every build session this project has run in. The plan
-  scoped this as a manual upload from day one for exactly that reason — if
-  you have the file, dropping it in is the only remaining step (the adapter
-  pattern that would consume it, `lib/datasets/csvAdapter.ts`, already
-  exists and is proven against a different real-world format).
-- **Razorpay's Settlements API** and the new **MCP server** are both real,
-  tested code, but neither has been exercised against a live network from
-  this sandbox — `api.razorpay.com` is blocked the same way every other
-  external host this project touches is. Both would need to be tried from
-  an unrestricted machine (or with a real Razorpay test-mode account) before
-  calling them fully verified rather than "correct by construction and
-  tested against a mock."
+- **Razorpay's Settlements API** and the **MCP server** are both real,
+  tested code — the MCP server has a genuine end-to-end integration test
+  spawning the real process over real stdio — but Razorpay's connector
+  specifically has never been exercised against a live network from this
+  sandbox: `api.razorpay.com` is blocked the same way every other external
+  host this project touches is. It would need to be tried from an
+  unrestricted machine (or with a real Razorpay test-mode account) before
+  calling it fully verified rather than "correct by construction and tested
+  against a mock."

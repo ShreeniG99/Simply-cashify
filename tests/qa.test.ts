@@ -218,37 +218,56 @@ describe('narrateTools', () => {
   })
 })
 
+/** Joins headline + points into one string for convenient substring assertions. */
+function flatten(answer: { headline: string; points: string[] }): string {
+  return [answer.headline, ...answer.points].join(' ')
+}
+
 describe('templateAnswer', () => {
   const run = fixture()
 
-  it('states the match, tier, confidence, and auto-clear status', () => {
+  it('returns a headline and points, not one dense paragraph', () => {
     const answer = templateAnswer(buildContext(run, 'INV-2841'))
-    expect(answer).toContain('INV-2841')
-    expect(answer).toContain('pay_2841')
-    expect(answer).toContain('fuzzy')
-    expect(answer).toContain('auto-cleared')
+    expect(typeof answer.headline).toBe('string')
+    expect(Array.isArray(answer.points)).toBe(true)
   })
 
-  it('states the exception reason and detail, grounded in the actual text', () => {
+  it('states the match, tier, confidence, and auto-clear status', () => {
+    const answer = templateAnswer(buildContext(run, 'INV-2841'))
+    expect(answer.headline).toContain('INV-2841')
+    expect(answer.headline).toContain('pay_2841')
+    expect(answer.headline).toContain('auto-cleared')
+    expect(flatten(answer)).toContain('fuzzy')
+  })
+
+  it('leads with the controller-voice summary for an exception, not the raw technical detail', () => {
     const answer = templateAnswer(buildContext(run, 'INV-2008'))
-    expect(answer).toContain('low confidence')
-    expect(answer).toContain('0.72 threshold')
+    expect(answer.headline).toBe(
+      'The closest candidate, pay_2008, falls short of our auto-approval bar — worth a second look before confirming.',
+    )
+  })
+
+  it('still carries the precise technical numbers in the supporting points, for audit', () => {
+    const answer = templateAnswer(buildContext(run, 'INV-2008'))
+    expect(flatten(answer)).toContain('0.72 threshold')
   })
 
   it('surfaces agent tool investigation in the answer — the legibility payoff', () => {
     const answer = templateAnswer(buildContext(run, 'INV-2124'))
-    expect(answer).toContain('bank holiday')
+    expect(flatten(answer)).toContain('bank holiday')
   })
 
-  it('lists rejected alternatives when present', () => {
+  it('lists rejected alternatives, each as its own point', () => {
     const answer = templateAnswer(buildContext(run, 'INV-2008'))
-    expect(answer).toContain('pay_2008')
-    expect(answer).toContain('rejected')
+    const altPoint = answer.points.find((p) => p.includes('pay_2008'))
+    expect(altPoint).toBeDefined()
+    expect(altPoint).toContain('set aside')
   })
 
   it('says plainly that an unknown id does not exist, rather than fabricating', () => {
     const answer = templateAnswer(buildContext(run, 'INV-0000'))
-    expect(answer).toContain('No record called INV-0000 exists')
+    expect(answer.headline).toBe('No record called INV-0000 exists in this run.')
+    expect(answer.points).toEqual([])
   })
 })
 
@@ -261,22 +280,25 @@ describe('answerQuestion', () => {
     const result = await answerQuestion('why is INV-2008 unresolved', run, null)
     expect(result.mode).toBe('template')
     expect(result.recordId).toBe('INV-2008')
-    expect(result.answer).toContain('low confidence')
+    expect(result.answer.headline).toContain('closest candidate')
   })
 
   it('returns the no-id message, unattached to any record, when nothing matches', async () => {
     const result = await answerQuestion('what is the weather', run, null)
     expect(result.recordId).toBeNull()
     expect(result.mode).toBe('template')
-    expect(result.answer).toMatch(/specific invoice or payment id/)
+    expect(flatten(result.answer)).toMatch(/specific invoice or payment id/)
   })
 
-  it('uses the LLM to polish prose when a client is configured and succeeds', async () => {
+  it('uses the LLM to polish prose when a client is configured and returns valid structured JSON', async () => {
     const client: LLMClient = {
       model: 'test',
       complete: vi.fn(
         async (): Promise<LLMCompletion> => ({
-          content: 'INV-2841 cleared automatically via fuzzy matching at 0.82 confidence.',
+          content: JSON.stringify({
+            headline: 'INV-2841 cleared automatically via fuzzy matching at 0.82 confidence.',
+            points: ['It matched pay_2841 on a strong text and timing signal.'],
+          }),
           toolCalls: [],
           usage: usage(80, 20),
           latencyMs: 50,
@@ -285,8 +307,37 @@ describe('answerQuestion', () => {
     }
     const result = await answerQuestion("why did INV-2841 settle?", run, client)
     expect(result.mode).toBe('llm')
-    expect(result.answer).toContain('0.82')
+    expect(result.answer.headline).toContain('0.82')
     expect(client.complete).toHaveBeenCalledTimes(1)
+  })
+
+  it('degrades to the template, not a crash, when the model replies with valid JSON in the wrong shape', async () => {
+    const client: LLMClient = {
+      model: 'test',
+      complete: vi.fn(async (): Promise<LLMCompletion> => ({
+        content: JSON.stringify({ answer: 'wrong field name entirely' }),
+        toolCalls: [],
+        usage: usage(10, 5),
+        latencyMs: 10,
+      })),
+    }
+    const result = await answerQuestion('why is INV-2008 unresolved', run, client)
+    expect(result.mode).toBe('template')
+    expect(result.answer.headline).toContain('closest candidate')
+  })
+
+  it('degrades to the template, not a crash, when the model replies with prose instead of JSON', async () => {
+    const client: LLMClient = {
+      model: 'test',
+      complete: vi.fn(async (): Promise<LLMCompletion> => ({
+        content: 'Sure! INV-2841 matched pay_2841 at high confidence.',
+        toolCalls: [],
+        usage: usage(10, 5),
+        latencyMs: 10,
+      })),
+    }
+    const result = await answerQuestion('why did INV-2841 settle?', run, client)
+    expect(result.mode).toBe('template')
   })
 
   it('passes only the narrow per-record context to the model, not the whole run', async () => {
@@ -314,7 +365,7 @@ describe('answerQuestion', () => {
     }
     const result = await answerQuestion('why is INV-2008 unresolved', run, client)
     expect(result.mode).toBe('template')
-    expect(result.answer).toContain('low confidence')
+    expect(result.answer.headline).toContain('closest candidate')
   })
 
   it('does not call the model at all when no record id was found', async () => {

@@ -14,6 +14,17 @@
  * exists or the live call fails. The LLM is told explicitly to use ONLY the
  * given context — this module structurally cannot answer with a fact that
  * isn't already in the record.
+ *
+ * The answer is a `headline` (the direct, one-sentence answer) plus `points`
+ * (the supporting facts, one per line) rather than one dense paragraph — a
+ * real user reported that a wall of prose buried the actual answer to their
+ * question ("why is pay_2090 rejected despite scoring 1?") inside a run-on
+ * sentence. The template can't parse arbitrary question phrasing without a
+ * model, so it can't always know which single fact a question is really
+ * after — but by surfacing every structured fact from the record as its own
+ * point (what happened, what the engine checked, what it set aside and why),
+ * the actual answer to almost any question about that record is one short
+ * line away rather than buried mid-paragraph.
  */
 
 import type { RunPayload } from '../api/run'
@@ -30,8 +41,14 @@ export type QAContext = {
   decision?: DecisionRecord
 }
 
+/** The direct answer, plus the supporting facts a reader can scan for the specific point they asked about. */
+export type QAAnswer = {
+  headline: string
+  points: string[]
+}
+
 export type QAResult = {
-  answer: string
+  answer: QAAnswer
   recordId: string | null
   mode: 'template' | 'llm'
 }
@@ -119,59 +136,72 @@ export function narrateTools(tools: string[], tier?: string): string | null {
 }
 
 /** The grounded answer, computed with no model call — the honest floor every answer can fall back to. */
-export function templateAnswer(ctx: QAContext): string {
+export function templateAnswer(ctx: QAContext): QAAnswer {
   if (ctx.outcome === 'unknown') {
-    return `No record called ${ctx.recordId} exists in this run.`
+    return { headline: `No record called ${ctx.recordId} exists in this run.`, points: [] }
   }
 
-  const lines: string[] = []
+  const points: string[] = []
+  let headline: string
 
   if (ctx.outcome === 'matched' && ctx.match) {
     const m = ctx.match
-    lines.push(
-      `${m.ledgerId} matched ${m.paymentIds.join(', ')} (${m.amount}) via the ${m.tier} tier ` +
-        `at confidence ${m.confidence.toFixed(2)}.`,
-    )
-    lines.push(
-      m.autoCleared
-        ? 'It was auto-cleared — no human review needed.'
-        : 'It scored below the auto-clear threshold, so it is routed for review despite being matched.',
-    )
+    headline = m.autoCleared
+      ? `${m.ledgerId} matched ${m.paymentIds.join(', ')} and was auto-cleared — no human review needed.`
+      : `${m.ledgerId} matched ${m.paymentIds.join(', ')}, but scored below the auto-clear bar, so it's routed for a human to check.`
+    points.push(`Amount ${m.amount}, resolved by the ${m.tier} tier at ${m.confidence.toFixed(2)} confidence.`)
   } else if (ctx.outcome === 'exception' && ctx.exception) {
     const e = ctx.exception
-    lines.push(`${e.id} is unresolved — reason: ${e.reason.replace(/_/g, ' ')}. ${e.detail}`)
+    // controllerSummary is the same plain-language explanation the exceptions
+    // table shows — one honest source for "what happened," not a second
+    // paraphrase that could drift from it. See lib/copy/exceptions.ts.
+    headline = e.controllerSummary
     if (e.rationale && e.rationale !== e.detail) {
-      lines.push(`Agent rationale: ${e.rationale}`)
+      points.push(`The agent's own note: ${e.rationale}`)
     }
+  } else {
+    headline = `${ctx.recordId}: no further detail available.`
   }
 
   if (ctx.decision) {
     const d = ctx.decision
-    if (d.evidence.length > 0) lines.push(`Evidence: ${d.evidence.join('; ')}.`)
+    if (d.evidence.length > 0) points.push(`What the engine checked: ${d.evidence.join('; ')}.`)
     const toolNarration = narrateTools(d.toolsCalled, d.tier)
-    if (toolNarration) lines.push(toolNarration)
+    if (toolNarration) points.push(toolNarration)
     if (d.alternatives.length > 0) {
       const alts = d.alternatives
-        .map((a) => `${a.paymentIds.join(', ')} (scored ${a.score} — ${a.rejectedBecause})`)
+        .map((a) => `${a.paymentIds.join(', ')} (scored ${a.score}) — ${a.rejectedBecause}`)
         .join('; ')
-      lines.push(`Alternatives considered and rejected: ${alts}.`)
+      points.push(`Other candidates it looked at and set aside: ${alts}.`)
     }
   }
 
-  return lines.join(' ')
+  return { headline, points }
 }
 
-const NO_ID_ANSWER =
-  'I can only answer about a specific invoice or payment id from this run — ' +
-  'mention one, for example "why didn\'t INV-2841 settle?"'
+const NO_ID_ANSWER: QAAnswer = {
+  headline: 'I can only answer about a specific invoice or payment id from this run.',
+  points: ['Mention one directly — for example: "why didn\'t INV-2841 settle?"'],
+}
 
 const SYSTEM_PROMPT = [
-  'You explain reconciliation decisions to a finance controller. Answer the',
-  'question using ONLY the JSON context provided — never invent an id, date,',
-  'amount, or fact that is not already present in it. If the context does not',
-  'answer the question, say so plainly rather than guessing. Two to four',
-  'sentences, plain prose, no markdown.',
+  'You explain reconciliation decisions to a finance controller — in plain',
+  'language, the way you would teach a smart newcomer who has never worked in',
+  'finance. Answer the question using ONLY the JSON context provided — never',
+  'invent an id, date, amount, or fact that is not already present in it. If',
+  'the context does not answer the question, say so plainly rather than',
+  'guessing.',
+  '',
+  'Respond with ONLY a JSON object, no other text, in exactly this shape:',
+  '{"headline": "one direct sentence that answers the question", "points": ["supporting point 1", "supporting point 2"]}',
+  '2 to 4 points, each one short plain sentence — no jargon left unexplained.',
 ].join('\n')
+
+function isQAAnswer(v: unknown): v is QAAnswer {
+  if (typeof v !== 'object' || v === null) return false
+  const obj = v as Record<string, unknown>
+  return typeof obj.headline === 'string' && Array.isArray(obj.points) && obj.points.every((p) => typeof p === 'string')
+}
 
 /**
  * Full pipeline: find the record, build its context, answer from it.
@@ -203,10 +233,18 @@ export async function answerQuestion(
       ],
       [],
     )
-    return { answer: completion.content ?? template, recordId, mode: completion.content ? 'llm' : 'template' }
+    const parsed: unknown = completion.content ? JSON.parse(completion.content) : null
+    if (isQAAnswer(parsed)) {
+      return { answer: parsed, recordId, mode: 'llm' }
+    }
+    // Right shape wasn't there — decline to the grounded template rather
+    // than guess at what the model meant, same as a malformed tool call
+    // elsewhere in this codebase (see lib/engine/adjudicate.ts).
+    return { answer: template, recordId, mode: 'template' }
   } catch {
-    // A network failure here must not break the Q&A card — degrade to the
-    // grounded template answer, same resilience pattern as tier 4.
+    // A network failure or malformed-JSON response must not break the Q&A
+    // card — degrade to the grounded template answer, same resilience
+    // pattern as tier 4.
     return { answer: template, recordId, mode: 'template' }
   }
 }

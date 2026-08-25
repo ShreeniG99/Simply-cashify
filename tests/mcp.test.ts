@@ -90,9 +90,16 @@ describe('Simply Cashify MCP server', () => {
     const recordId = excStructured.exceptions[0].id
     const explained = await client.callTool({ name: 'explain_exception', arguments: { runId, recordId } })
     expect(explained.isError).not.toBe(true)
-    const explainedStructured = explained.structuredContent as { outcome: string; explanation: string }
+    const explainedStructured = explained.structuredContent as {
+      outcome: string
+      explanation: { headline: string; points: string[] }
+    }
     expect(explainedStructured.outcome).toBe('exception')
-    expect(explainedStructured.explanation).toContain(recordId)
+    expect(explainedStructured.explanation.headline.length).toBeGreaterThan(0)
+    // The structured recordId field is the grounding — the free-text headline
+    // itself doesn't always restate the id (e.g. an orphan's controller
+    // summary describes the situation without repeating its own id).
+    expect((explained.structuredContent as { recordId: string }).recordId).toBe(recordId)
   })
 
   it('never invents an answer for a record id that does not exist in the run', async () => {
@@ -100,9 +107,10 @@ describe('Simply Cashify MCP server', () => {
     const runId = (run.structuredContent as Record<string, unknown>).runId as string
 
     const explained = await client.callTool({ name: 'explain_exception', arguments: { runId, recordId: 'INV-DOES-NOT-EXIST' } })
-    const structured = explained.structuredContent as { outcome: string; explanation: string }
+    const structured = explained.structuredContent as { outcome: string; explanation: { headline: string; points: string[] } }
     expect(structured.outcome).toBe('unknown')
-    expect(structured.explanation).toBe('No record called INV-DOES-NOT-EXIST exists in this run.')
+    expect(structured.explanation.headline).toBe('No record called INV-DOES-NOT-EXIST exists in this run.')
+    expect(structured.explanation.points).toEqual([])
   })
 
   it('returns an actionable error, not a crash, for an unknown runId', async () => {

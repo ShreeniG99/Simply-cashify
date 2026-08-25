@@ -3,10 +3,11 @@
 import { useState } from 'react'
 import { Send } from 'lucide-react'
 import type { RunPayload } from '@/lib/api/run'
+import type { QAAnswer } from '@/lib/qa/answer'
 
 type Exchange = {
   question: string
-  answer: string
+  answer: QAAnswer
   recordId: string | null
   mode: 'template' | 'llm'
 }
@@ -97,7 +98,17 @@ export function SettlementQA({ run }: { run: RunPayload }) {
           {exchanges.map((ex, i) => (
             <div key={i} className="rounded-lg border border-border bg-bg p-3">
               <p className="font-mono text-xs text-text-secondary">{ex.question}</p>
-              <p className="mt-1.5 font-mono text-xs leading-relaxed text-text-primary">{ex.answer}</p>
+              <p className="mt-1.5 font-mono text-xs leading-relaxed text-text-primary">{ex.answer.headline}</p>
+              {ex.answer.points.length > 0 && (
+                <ul className="mt-1.5 space-y-1">
+                  {ex.answer.points.map((point, j) => (
+                    <li key={j} className="flex gap-2 font-mono text-xs leading-relaxed text-text-secondary">
+                      <span className="text-accent">·</span>
+                      <span>{point}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <p className="mt-1.5 font-mono text-[10px] text-text-secondary">
                 {ex.recordId ? `grounded in ${ex.recordId} · ` : ''}
                 {ex.mode === 'llm' ? 'LLM-polished, same facts' : 'template — no LLM key configured'}

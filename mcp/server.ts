@@ -294,7 +294,8 @@ Error Handling:
       const ctx = buildContext(run.payload as RunPayload, params.recordId)
       const explanation = templateAnswer(ctx)
       const output = { recordId: params.recordId, outcome: ctx.outcome, explanation }
-      return { content: [{ type: 'text' as const, text: explanation }], structuredContent: output }
+      const text = [explanation.headline, ...explanation.points.map((p) => `- ${p}`)].join('\n')
+      return { content: [{ type: 'text' as const, text }], structuredContent: output }
     } catch (error) {
       return { content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }] }
     }
