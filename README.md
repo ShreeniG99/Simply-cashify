@@ -87,6 +87,7 @@ dashboard never blocks on it.
 | `npm run fetch:berka` | Downloads the real Berka dataset (~67MB) |
 | `npm run bench:berka` | Throughput/correctness at scale on 1.06M real rows |
 | `npm run bench:benchrec` | Real-data proof on BenchRec — no fetch script; place the 3 CSVs in `data/raw/benchrec/` yourself (see `DATA.md`) |
+| `npm run bench:benchrec-baseline` | Scores a real ICAIF'23 competition submission against the same eval batch, with our own scorer (see `DATA.md`) |
 | `npm run mcp` | Starts the MCP server on stdio, for Claude Desktop or `tests/mcp.test.ts` |
 
 `npm run bench` accepts environment overrides:
@@ -502,6 +503,16 @@ sweep `lib/eval/score.ts` already runs for the generator) would very likely
 raise recall substantially; not attempted here for time, and named as the
 obvious next step rather than left silently undone. See `DATA.md` for the
 full breakdown.
+
+**External baseline, on the same batch** (`npm run bench:benchrec-baseline`):
+a real ICAIF'23 competition submission (`MatcherByChatGPT_submission.csv`,
+also supplied by the project owner) scores **95.2% precision, 65.9% recall**
+against the identical eval + solution split, scored with our own
+`scoreBenchRec` — same scorer, same batch, only the predictions differ. The
+ceiling matches ours exactly (93.8%), which cross-validates the truth
+derivation, and the recall gap against an equally precision-scored system on
+the exact same rows is the quantified size of the threshold-calibration
+finding above.
 
 ### Step 9 — reach: Simply Cashify as an MCP server
 

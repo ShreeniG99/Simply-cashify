@@ -138,3 +138,30 @@ verified by this session and is worth confirming once deployed.
   `lib/eval/score.ts` already does for the generator) would very likely
   raise recall substantially; not done here for time, and noted as the
   obvious next step rather than silently left out.
+
+- **External baseline comparison — `npm run bench:benchrec-baseline`.**
+  The project owner also supplied `MatcherByChatGPT_submission.csv`, a real
+  entry to the same ICAIF'23 BenchRec Benchmark Competition, predicting
+  matches on this exact eval split. Not committed (gitignored alongside the
+  other three CSVs) — place it in `data/raw/benchrec/` yourself to
+  reproduce. `scripts/bench-benchrec-baseline.ts` scores it with the
+  *identical* `scoreBenchRec` function our own engine is scored with, against
+  the same held-out solution file — same scorer, same batch, only the
+  predictions differ. It looks up each claimed A row's own allocation key
+  from `truth.ownAllocation` rather than trusting the submission's
+  self-reported `targetAllocation` column, the same rule already applied to
+  our own results, so a submission can't inflate its score by echoing a
+  guess back into that field.
+
+  **Measured** (this machine, `npm run bench:benchrec-baseline`): **95.2% precision, 65.9%
+  recall**, at a **93.8% ceiling** — identical to our own run's ceiling,
+  which cross-validates the truth derivation (same batch, same true
+  answers, independent of whose predictions are being scored). The
+  identical ceiling alongside a much higher recall is the clearest evidence
+  yet for the calibration story above: a comparably-scored system finds
+  65.9% of the true matches at 95.2% precision on the *exact same batch*
+  our engine only finds 12.4% of at 99.1% precision. That gap is the
+  quantified size of the "one fixed threshold, two different signal
+  shapes" finding — not a claim our matching logic is weaker, since the
+  matcher never even sees this submission's file, but a concrete number for
+  how much recall a dataset-specific threshold sweep would likely recover.
