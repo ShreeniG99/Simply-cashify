@@ -134,10 +134,67 @@ verified by this session and is worth confirming once deployed.
   exists to avoid, declining a near-miss rather than lowering the bar to
   claim it is the intended, conservative behavior — precisely the same
   precision-gated philosophy the generator's own headline metric already
-  uses. A dataset-specific threshold calibration (the same sweep
-  `lib/eval/score.ts` already does for the generator) would very likely
-  raise recall substantially; not done here for time, and noted as the
-  obvious next step rather than silently left out.
+  uses.
+
+- **Dataset-specific threshold sweep — `npm run bench:benchrec-sweep`.** The
+  obvious next step named above, actually run rather than just predicted.
+  Unlike `lib/eval/score.ts`'s sweep for the generator (which only ever
+  raises a post-hoc filter above an already-fixed match-time threshold),
+  BenchRec's missed recall sits *below* 0.72, and `fuzzyMatch`/
+  `assignmentMatch` bake the accept threshold directly into which edges the
+  solver may even consider — a different threshold can produce a genuinely
+  different optimal assignment, not just a filtered view of the same one.
+  So this re-solves at 16 threshold values from 0.40 to 0.90.
+  `lib/engine/benchrecMatch.ts` was split into a threshold-independent
+  `buildBenchRecComponents()` (candidate blocking + partitioning — where the
+  real ~7-minute cost actually lives) and a threshold-dependent
+  `solveBenchRecComponents()` (cheap per-component re-solve), so the sweep
+  pays the expensive part once and re-solves 16 times in seconds, not 16×7
+  minutes. `matchBenchRec()`'s own behavior is unchanged (verified: all 24
+  benchrec + truth-isolation tests pass identically before and after).
+
+  **Measured** (this machine, eval split):
+
+  | threshold | precision | recall | claimed | wrong |
+  |---|---|---|---|---|
+  | 0.40 | 92.1% | 95.1% | 31,038 | 2,459 |
+  | 0.50 | 92.4% | 95.1% | 30,922 | 2,338 |
+  | 0.60 | 92.5% | 91.1% | 29,613 | 2,219 |
+  | 0.64 | 92.6% | 77.3% | 25,098 | 1,866 |
+  | 0.66 | 94.5% | 32.2% | 10,232 |   566 |
+  | 0.68 | 96.5% | 19.4% |  6,035 |   212 |
+  | 0.70 | 97.6% | 15.3% |  4,725 |   115 |
+  | **0.72 (shipped)** | **99.1%** | **12.4%** | **3,769** | **34** |
+  | 0.75 | 99.7% | 10.7% |  3,219 |    11 |
+  | 0.80 | 99.9% |  9.2% |  2,767 |     3 |
+
+  The real shape is sharper than the histogram alone predicted: recall holds
+  nearly flat (~91–95%) across 0.40–0.60, then falls off a cliff between
+  0.64 (77.3%) and 0.66 (32.2%) — a genuine cluster of true matches sitting
+  right at that boundary, not a smooth decline. Below 0.64, precision stays
+  remarkably stable around 92%; it is not a slippery slope to garbage, it is
+  a real, near-saturated (95.1% of the 93.8% ceiling) precision/recall
+  plateau the shipped 0.72 default sits well above and to the right of.
+
+  Operating points (lowest threshold clearing each precision bar, same
+  selection rule `lib/eval/score.ts` uses for the generator):
+
+  | precision target | threshold | precision | recall |
+  |---|---|---|---|
+  | ≥ 99.5% | 0.75 | 99.7% | 10.7% |
+  | ≥ 99.0% | 0.72 (shipped) | 99.1% | 12.4% |
+  | ≥ 97.0% | 0.70 | 97.6% | 15.3% |
+  | ≥ 95.0% | 0.68 | 96.5% | 19.4% |
+
+  **The shipped default (0.72) is left unchanged** — this sweep is a
+  diagnostic, not a silent retune, same discipline as everywhere else in
+  this project. It shows precisely what a maintainer would trade: staying
+  at ≥99% precision caps recall near 12–15%; accepting ~92–93% precision
+  (still well above the industry's typical <90% auto-match baseline) opens
+  recall up to 91–95%, i.e. almost the entire matchable ceiling. Which
+  point to ship is a product decision about how much wrong-match risk a
+  given deployment tolerates, not something to decide unilaterally in a
+  benchmark script.
 
 - **External baseline comparison — `npm run bench:benchrec-baseline`.**
   The project owner also supplied `MatcherByChatGPT_submission.csv`, a real

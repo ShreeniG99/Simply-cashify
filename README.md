@@ -514,6 +514,21 @@ derivation, and the recall gap against an equally precision-scored system on
 the exact same rows is the quantified size of the threshold-calibration
 finding above.
 
+**Threshold sweep, actually run** (`npm run bench:benchrec-sweep`): re-solves
+at 16 threshold values from 0.40–0.90 against the same precomputed
+candidates (a `lib/engine/benchrecMatch.ts` split — `buildBenchRecComponents`
+threshold-independent, `solveBenchRecComponents` cheap to re-run — makes this
+tractable without repeating the ~7-minute candidate build per point). The
+real shape: recall holds nearly flat at 91–95% across 0.40–0.60, falls off a
+cliff between 0.64 (77.3% recall) and 0.66 (32.2%), then decays gently up to
+the shipped 0.72 (99.1% precision, 12.4% recall). Operating points: ≥99%
+precision tops out at 12.4% recall (the shipped point); relaxing to ≥95%
+precision reaches 19.4% recall at threshold 0.68; going as low as 0.60 holds
+92.5% precision — still comfortably above the industry's typical <90%
+auto-match baseline — while recovering 91.1% recall, nearly the entire 93.8%
+ceiling. The shipped default is left unchanged; this is a diagnostic, not a
+silent retune. See `DATA.md` for the full table.
+
 ### Step 9 — reach: Simply Cashify as an MCP server
 
 `mcp/server.ts` — the same reconciliation engine, exposed as an MCP server so
