@@ -199,6 +199,15 @@ export async function reconcile(
 
   // ---- Exceptions: everything tiers 1-4 could not resolve ----
   onProgress?.({ kind: 'tier', tier: 'exceptions', label: 'Classifying the remaining residual with a typed reason' })
+  // Which ledger row actually claimed each payment, so a candidate that scored
+  // WELL can be explained honestly ("already matched to INV-2090") instead of
+  // the blanket "below accept threshold" claim, which is false whenever the
+  // candidate's own score clears the threshold — see rejectedBecauseFor below.
+  const claimedBy = new Map<string, string>()
+  for (const m of matches) {
+    for (const paymentId of m.paymentIds) claimedBy.set(paymentId, m.ledgerId)
+  }
+
   for (const l of ledger) {
     if (matchedLedger.has(l.id) || agentExceptionIds.has(l.id)) continue
     const cands = (byLedger.get(l.id) ?? []).sort((a, b) => b.confidence - a.confidence)
@@ -215,7 +224,7 @@ export async function reconcile(
       alternatives: (cands.slice(0, 3) ?? []).map((c) => ({
         paymentIds: [c.payment.id],
         score: round(c.confidence),
-        rejectedBecause: `confidence ${round(c.confidence)} below accept threshold ${cfg.fuzzyAcceptThreshold}`,
+        rejectedBecause: rejectedBecauseFor(c, cfg, claimedBy, reason),
       })),
       latencyMs: 0,
     })
@@ -322,6 +331,38 @@ function toolsFor(ledgerId: string, ledger: CanonicalRecord[], cfg: MatchConfig)
   if (cfg.enableFx && rec && rec.currency !== 'INR') tools.push('fx.convert')
   if (cfg.enableHolidayAwareness) tools.push('calendar.isBusinessDay')
   return tools
+}
+
+/**
+ * Why a candidate wasn't used for an exception row — honestly, not by rote.
+ *
+ * The naive version of this ("confidence X below accept threshold Y") is
+ * only true for the `low_confidence` exception class. Applying it to every
+ * exception unconditionally produces a self-contradiction the moment a
+ * candidate scores WELL: a duplicate ledger row's best candidate can score a
+ * perfect 1.0 against the payment its twin already claimed, and "1 is below
+ * 0.72" is simply false. Real fix is to check what's actually true of this
+ * candidate before writing the sentence, not to reuse one sentence for every
+ * exception reason.
+ */
+function rejectedBecauseFor(
+  c: Candidate,
+  cfg: MatchConfig,
+  claimedBy: Map<string, string>,
+  reason: ExceptionReason,
+): string {
+  if (c.confidence < cfg.fuzzyAcceptThreshold) {
+    return `confidence ${round(c.confidence)} below accept threshold ${cfg.fuzzyAcceptThreshold}`
+  }
+  const claimant = claimedBy.get(c.payment.id)
+  if (claimant) {
+    return `already matched to ${claimant}, which scored higher or was resolved first`
+  }
+  // The candidate itself clears the threshold and nothing else claimed it —
+  // this row was excluded for a reason that has nothing to do with candidate
+  // scoring at all (e.g. this exact ledger row is itself the duplicate, or
+  // carries an invalid IFSC). Name that reason rather than blaming the score.
+  return `scored ${round(c.confidence)}, above threshold — not used because this invoice was flagged as ${reason.replace(/_/g, ' ')}`
 }
 
 function alternativesFor(m: ProposedMatch, cands: Candidate[]) {
