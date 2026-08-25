@@ -16,6 +16,7 @@
     "bench:berka": "tsx scripts/bench-berka.ts",
     "bench:benchrec": "tsx scripts/bench-benchrec.ts",
     "bench:benchrec-baseline": "tsx scripts/bench-benchrec-baseline.ts",
+    "bench:benchrec-sweep": "tsx scripts/sweep-benchrec-threshold.ts",
     "mcp": "tsx mcp/server.ts"
   },
   "dependencies": {

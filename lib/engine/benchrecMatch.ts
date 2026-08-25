@@ -173,25 +173,66 @@ function connectedComponents(candidates: Candidate[]): Candidate[][] {
   return [...groups.values()]
 }
 
-export function matchBenchRec(
+/**
+ * The expensive, THRESHOLD-INDEPENDENT half of matching: amount-window
+ * blocking (dominated by `scoreCandidate`'s fuzzy string scoring over every
+ * blocked pair — this is what actually costs the ~7 minutes the real
+ * benchmark reports, not the solve step below), tier-1 exact resolution, and
+ * connected-component partitioning. None of these three depend on
+ * `cfg.fuzzyAcceptThreshold` — candidates are gated at a fixed, low
+ * `confidence > 0.2` sanity floor in `buildBlockedCandidates`, and which
+ * ledger/payment ids land in the same component is a property of which
+ * candidates EXIST, not which ones would eventually clear an accept bar.
+ *
+ * Split out specifically so a threshold sweep (`scripts/sweep-benchrec-
+ * threshold.ts`) can pay this cost ONCE and cheaply re-solve at many
+ * threshold values, instead of re-blocking and re-scoring the same ~340K
+ * candidate pairs per sweep point.
+ */
+export type BenchRecComponents = {
+  candidates: Candidate[]
+  tier1: TierResult
+  contestedComponents: Candidate[][]
+}
+
+export function buildBenchRecComponents(
   ledger: CanonicalRecord[],
   settlements: CanonicalRecord[],
   cfg: MatchConfig = BENCHREC_CONFIG,
-): { results: BenchRecMatchResult[]; stats: BenchRecMatchStats } {
+): BenchRecComponents {
   const candidates = buildBlockedCandidates(ledger, settlements, cfg)
   const tier1 = exactMatch(candidates)
 
   const contested = candidates.filter(
     (c) => !tier1.consumedLedger.has(c.ledger.id) && !tier1.consumedPayments.has(c.payment.id),
   )
-  const components = connectedComponents(contested)
+  const contestedComponents = connectedComponents(contested)
+
+  return { candidates, tier1, contestedComponents }
+}
+
+/**
+ * The cheap, THRESHOLD-DEPENDENT half: solves each precomputed component
+ * (Hungarian assignment, or greedy for an oversized cluster) under the given
+ * `cfg.fuzzyAcceptThreshold`, since that threshold gates which edges the
+ * solver is even allowed to consider (see `assignmentMatch`/`fuzzyMatch` in
+ * `lib/engine/match.ts`) — a different threshold really can produce a
+ * different optimal assignment, not just a post-hoc filter of the same one.
+ */
+export function solveBenchRecComponents(
+  ledgerCount: number,
+  settlements: CanonicalRecord[],
+  built: BenchRecComponents,
+  cfg: MatchConfig,
+): { results: BenchRecMatchResult[]; stats: BenchRecMatchStats } {
+  const { candidates, tier1, contestedComponents } = built
 
   let largestComponentSize = 0
   let oversizedComponentsFellBackToGreedy = 0
   const contestedTier: 'assignment' | 'fuzzy' = cfg.enableAssignment ? 'assignment' : 'fuzzy'
   const contestedMatches: TierResult['matches'] = []
 
-  for (const comp of components) {
+  for (const comp of contestedComponents) {
     largestComponentSize = Math.max(largestComponentSize, comp.length)
     const empty: TierResult = { matches: [], consumedLedger: new Set(), consumedPayments: new Set() }
 
@@ -216,13 +257,22 @@ export function matchBenchRec(
   return {
     results,
     stats: {
-      ledgerConsidered: ledger.length,
+      ledgerConsidered: ledgerCount,
       settlementsConsidered: settlements.length,
       candidatesGenerated: candidates.length,
-      componentsSolved: components.length,
+      componentsSolved: contestedComponents.length,
       largestComponentSize,
       oversizedComponentsFellBackToGreedy,
       confidenceHistogram: histogramOf(candidates),
     },
   }
+}
+
+export function matchBenchRec(
+  ledger: CanonicalRecord[],
+  settlements: CanonicalRecord[],
+  cfg: MatchConfig = BENCHREC_CONFIG,
+): { results: BenchRecMatchResult[]; stats: BenchRecMatchStats } {
+  const built = buildBenchRecComponents(ledger, settlements, cfg)
+  return solveBenchRecComponents(ledger.length, settlements, built, cfg)
 }
