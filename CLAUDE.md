@@ -1,8 +1,18 @@
 # Simply Cashify — working rules
 
 Reconciliation engine (bank ↔ settlement ↔ ledger) with measured accuracy and a typed,
-honest exception list. Currently being extended with **Bharosa** — a merchant trust
-signal derived from reconciliation health — for the Razorpay AI Buildathon, Track 01.
+honest exception list. Currently being extended with **Bharosa** — a merchant trust signal
+derived from reconciliation health — for the Razorpay AI Buildathon, Track 01.
+
+**The one question Bharosa answers:** should this agent send money to this merchant, right
+now, for this amount?
+
+**Shape:** deterministic evidence → AI judgment on the residual → a hard gate on the action.
+Trust tiers 1–3 compute six Beta-posterior components from `ReconcileResult` with no LLM.
+Tier 4 (`lib/merchants/adjudicate.ts`) sends only the ambiguous residual to an LLM, which
+must conclude `approve` / `approve_with_cap` / `request_evidence` / `decline`. The gate in
+`lib/agent/gates.ts` bounds the action regardless of what tier 4 said. **Tier 4 advises; it
+never holds the purse, and it may only hold or lower a band, never raise one.**
 
 **Read `BUILD-PLAN.md` before starting work.** It is the day-by-day plan and it is authoritative.
 
@@ -27,9 +37,13 @@ something that did not happen. Audit logs keep the real `mode` — they are neve
 rewritten to look better.
 
 **4. The scorer must never see the answer key.**
-`lib/merchants/truth.ts` holds ground-truth labels. Nothing that scores itself may
-import it, enforced by `tests/truth-isolation.test.ts`. When you add a new scoring
-entry point, add it to `BLIND_ENTRYPOINTS` in that test.
+`lib/merchants/truth.ts` holds ground-truth labels. Nothing that scores itself may import
+it, enforced by `tests/truth-isolation.test.ts` — which needs its **own describe block and
+own truth-module constant** per family, not an append to the shared array.
+
+⚠️ The walker's regex matches `import type … from`, so a **type-only import from
+`truth.ts` fails isolation** even though no runtime data flows. Shared types live in
+`lib/merchants/types.ts`; `truth.ts` holds label data only.
 
 **5. NEVER tune the generator to make a metric look better.** ⚠️
 This is the most important rule in this file.
@@ -80,7 +94,7 @@ whole thesis is honesty about what is real.
 | `npm run build` | Production build |
 | `npm run dev` | Dev server, port 3000 |
 | `npm run bench` | Existing reconciliation benchmark |
-| `npm run bench:trust` | New trust-signal benchmark (being built) |
+| `npm run bench:trust` | Trust-signal benchmark — the numbers you cite |
 | `npm run mcp` | MCP server over stdio |
 
 ---
@@ -98,8 +112,18 @@ a perfect one that is not.
 
 ---
 
+## Scope is frozen
+
+The problem statement and the file list in `BUILD-PLAN.md` are final. New ideas go into
+the README under future work — not into the build. Three pivots have already happened and
+a panel cannot evaluate a thesis, only what runs.
+
 ## Deadline
 
-Buildathon submission closes **5 September 2026**; target submit date is **4 September**.
-When time is short, cut from the cut list in `BUILD-PLAN.md` §7 — never cut the
-circularity test (Day 3), the measured accuracy (Day 4), or the truth-isolation rule.
+Submission closes **Sat 5 September 2026**; **submit Thursday 3 September.** Eight days
+from 27 August. When time is short, cut from `BUILD-PLAN.md` §5 — never cut the circularity
+test, the measured accuracy, the truth-isolation block, tier 4, or the decision-trace screen.
+
+**Screens are timeboxed to their slot.** Reuse the existing components and the DECLUTTR
+design system; do not build a new one. If a screen is not working when its slot ends, it
+ships as it is or it goes. Polish is unbounded.

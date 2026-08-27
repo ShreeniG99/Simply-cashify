@@ -7,7 +7,7 @@ because the project's entire thesis is honesty about what is real.
 Tags: **[V]** verified against a primary or named source · **[A]** assumption we chose,
 labelled as such · **[O]** our own measured output
 
-Last checked: 25 August 2026.
+Last checked: 27 August 2026.
 
 ---
 
@@ -94,11 +94,39 @@ ICAIF'23 submission on the same batch at **95.2% precision, 65.9% recall**.
 
 ---
 
+## 4b. "Why not real data?" — the prepared answer
+
+**[V]** The base engine is already scored on two real datasets: **Berka** (1,062,791 rows)
+and **BenchRec** (69,171 rows, labelled, with a published ICAIF'23 baseline to compare
+against). Real data is not absent from this project.
+
+**[V/O]** What does not exist publicly is a dataset shaped like *many merchants × matched
+bank/settlement/ledger × a labelled trust outcome*. That combination is proprietary to
+payment processors and acquirers. This is a structural gap, not a search failure.
+
+**Olist (Brazilian e-commerce) was evaluated and rejected**, deliberately:
+- Licensed **CC BY-NC-SA 4.0** — non-commercial, a real constraint rather than a footnote
+- Hand-picking merchants into personality buckets **relocates circularity** rather than removing it
+- Its review-score signal contradicts this project's thesis — reviews are fakeable, which
+  is the whole reason to use reconciliation instead
+- It does not address the AI-judgment question, which was the actual gap
+
+*Say this if asked. A rejected dataset with stated reasons is a stronger answer than a
+compromised one.*
+
+---
+
 ## 5. Assumptions we are choosing — label every one
 
-**[A]** Trust-signal component weights are **hand-set and disclosed**, not trained,
-fitted or calibrated on outcomes. Every tool response must carry this caveat in its
-payload, not in a footnote.
+**[A]** Component **priors and the recency-decay half-life** are chosen and disclosed, not
+fitted on outcomes. The scoring itself is a Beta-Bernoulli posterior with a conservative
+lower bound — so the *combination* rule is principled, but the priors are still ours.
+Every tool response carries this caveat in its payload, not in a footnote.
+
+**[A]** `insufficient_history` fires when the credible interval is too wide to place a
+merchant in a single band, plus a hard floor on n. Both parameters are **pinned in config
+before any score is computed** — setting them after seeing results would be generator
+tuning in a different costume.
 
 **[A]** Cost of a wrong trust call, in both directions, comes from named constants in
 the code, commented as assumptions — not measured.
@@ -120,6 +148,8 @@ chosen threshold, disclosed.
 - ✗ Any accuracy figure presented as real-world merchant accuracy
 - ✗ That Razorpay endorses, reviewed or supplied anything
 - ✗ Any statistic not in this file
+- ✗ That tier 4 decides anything binding — **it advises; the gate bounds the money**, and
+  tier 4 may only hold or lower a band, never raise one
 
 ---
 
